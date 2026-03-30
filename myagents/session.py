@@ -30,6 +30,7 @@ class Session:
         # Run the agent loop until it stops
         self._agent_loop()
 
+        # Return final response 
         final_message = self._history[-1]
         content = final_message["content"]
         return content
@@ -38,7 +39,6 @@ class Session:
         while True:
             # Agent takes a step
             response = self._main_agent.step(self._history)
-
             # Append assistant turn
             self._history.append({"role": "assistant", "content": response.content})
 
@@ -48,18 +48,25 @@ class Session:
 
             # Execute each tool call, collect results, or call sub-agents as needed, and append results to history for next step
             results = []
+
             for block in response.content:
                 if block.type == "tool_use":
                     tool_name = block.name
                     tool_kwargs = block.input
+
                     print(f"\033[33mTool {tool_name} {tool_kwargs}\033[0m")
+
+                    # Tool call
                     output = self._tool_manager.execute(
                         allowed_tools=self._main_agent.allowed_tools, 
                         tool_name=tool_name, 
                         **tool_kwargs
                     )
+
                     print(truncate(output))
+
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+
             self._history.append({"role": "user", "content": results})
 
     def close(self):

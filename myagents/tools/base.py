@@ -208,6 +208,9 @@ class ToolManager:
             self._registry.register(tool)
 
     def execute(self, allowed_tools: list[str], tool_name: str, **kwargs) -> str:
+        # TODO distinguish between different errors 
+        # to facilitate better error handling by the agent .
+        # e.g. tool not allowed / permisson denied vs tool execution error
         try:
             return self._execute(allowed_tools, tool_name, **kwargs)
         except Exception as e:
