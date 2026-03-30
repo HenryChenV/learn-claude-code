@@ -1,7 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 import inspect
-from typing import Callable, Dict, List, get_args, get_origin, overload
+from types import UnionType
+from typing import Callable, Dict, List, Union, get_args, get_origin, overload
 from typing_extensions import override
 
 import jsonschema
@@ -108,7 +109,10 @@ class FunctionTool(Tool):
         required = []
 
         for name, param in sig.parameters.items():
-            schema = cls.py_type_to_json_schema(param.annotation)
+            try:
+                schema = cls.py_type_to_json_schema(param.annotation)
+            except ValueError as e:
+                raise ValueError(f"Failed to infer JSON schema for function '{func}': {e}")
 
             if param.default is param.empty:
                 required.append(name)
@@ -135,6 +139,11 @@ class FunctionTool(Tool):
         if py_type == bool:
             return {"type": "boolean"} 
 
+        # None
+        if py_type is type(None):
+            return {"type": "null"}
+
+        # Empty
         if py_type is inspect._empty:
             return {"type": "string"}
 
@@ -150,6 +159,12 @@ class FunctionTool(Tool):
         if origin in (dict, Dict):
             value_type = args[1] if len(args) == 2 else str
             return {"type": "object", "additionalProperties": cls.py_type_to_json_schema(value_type)}
+
+        # Union
+        if origin in (Union, UnionType):
+            return {
+                "oneOf": [cls.py_type_to_json_schema(arg) for arg in args]
+            }
 
         raise ValueError(f"Unsupported parameter type: {py_type}")
 
@@ -193,6 +208,12 @@ class ToolManager:
             self._registry.register(tool)
 
     def execute(self, allowed_tools: list[str], tool_name: str, **kwargs) -> str:
+        try:
+            return self._execute(allowed_tools, tool_name, **kwargs)
+        except Exception as e:
+            return f"Error executing tool '{tool_name}': {e}"
+
+    def _execute(self, allowed_tools: list[str], tool_name: str, **kwargs) -> str:
         if tool_name not in allowed_tools:
             raise ValueError(f"Tool '{tool_name}' is not in the list of allowed tools.")
 
