@@ -1,6 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from types import MappingProxyType
+import enum
+import inspect
+from typing import Callable, Dict, List, get_args, get_origin
 
 import jsonschema
 
@@ -40,6 +42,114 @@ class Tool(ABC):
             "description": self.description,
             "input_schema": self.input_schema,
         }
+
+
+class FunctionTool(Tool):
+
+    _func: Callable[..., str]
+
+    def __init__(self, func: Callable[..., str], name: str, description: str, input_schema: dict) -> None:
+        super().__init__(name=name, description=description, input_schema=input_schema)
+        self._func = func
+
+    def _run(self, **kwargs) -> str:
+        return self._func(**kwargs)
+
+    @classmethod
+    def wrapper(
+        cls, 
+        name: str | None = None, 
+        description: str | None = None, 
+        input_schema: dict | None = None):
+
+        def decerator(func: Callable[..., str]) -> FunctionTool:
+            tool_name = name or func.__name__
+            tool_description = description or func.__doc__
+            tool_input_schema = input_schema or cls._infer_schema(func)
+
+            if not tool_name:
+                raise ValueError(f"Failed to infer tool name from function {func}. Please provide a name.")
+            if not tool_description:
+                raise ValueError(f"Failed to infer tool description from function {func}. Please provide a description.")
+            if not tool_input_schema:
+                raise ValueError(f"Failed to infer tool input schema from function {func}. Please provide an input_schema.")
+
+            return FunctionTool(func=func, name=tool_name, description=tool_description, input_schema=tool_input_schema)
+
+        return decerator
+
+    @classmethod
+    def _infer_schema(cls, func: Callable[..., str]) -> dict:
+        sig = inspect.signature(func)
+        properties = {}
+        required = []
+
+        for name, param in sig.parameters.items():
+            schema = cls.py_type_to_json_schema(param.annotation)
+
+            if param.default is param.empty:
+                required.append(name)
+            else:
+                schema["default"] = param.default
+
+            properties[name] = schema
+
+        return {
+            "type": "object",
+            "properties": properties,
+            "required": required,
+        }
+
+    @classmethod
+    def py_type_to_json_schema(cls, py_type) -> dict:
+        # basic types
+        if py_type == str:
+            return {"type": "string"}
+        if py_type == int:
+            return {"type": "integer"}
+        if py_type == float:
+            return {"type": "number"}
+        if py_type == bool:
+            return {"type": "boolean"} 
+
+        if py_type is inspect._empty:
+            return {"type": "string"}
+
+        origin = get_origin(py_type)
+        args = get_args(py_type)
+
+        # List[T]
+        if origin in (list, List):
+            item_type = args[0] if args else str
+            return {"type": "array", "items": cls.py_type_to_json_schema(item_type)}
+
+        # Dict[str, T]
+        if origin in (dict, Dict):
+            value_type = args[1] if len(args) == 2 else str
+            return {"type": "object", "additionalProperties": cls.py_type_to_json_schema(value_type)}
+
+        raise ValueError(f"Unsupported parameter type: {py_type}")
+
+
+def function_tool_wrapper(
+        name: str | None = None, 
+        description: str | None = None, 
+        input_schema: dict | None = None):
+
+    def infer_schema(func: Callable) -> dict | None:
+        sig = inspect.signature(func)
+        properties = {}
+        required = []
+
+        for name, param in sig.parameters.items():
+            if param.default is param.empty:
+                required.append(name)
+            properties[name] = {"type": "string"}
+        return input_schema
+
+    def decorator(func: Callable) -> FunctionTool:
+        return FunctionTool(name=name, description=description, input_schema=input_schema, func=func)
+    return decorator
 
 
 class ToolRegistry:

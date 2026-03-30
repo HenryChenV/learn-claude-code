@@ -3,12 +3,12 @@ Tools for the myagents package.
 """
 
 from .base import Tool, ToolRegistry, ToolManager
-from .bash_tools import bash
+from .bash_tools import run_bash
 
 
 __all__ = [
     "ToolRegistry",
     "ToolManager",
     "Tool",
-    "bash"
+    "run_bash",
 ]

@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 
 from agent import AnthropicAgent
-from tools import ToolManager, bash
+from tools import run_bash
 from session import Session
 
 
@@ -26,6 +26,7 @@ class TUI:
         while True:
             i = i + 1
 
+            # Get user input
             try:
                 prompt = input(f"\033[36mInput {i}: \033[0m")
             except (EOFError, KeyboardInterrupt):
@@ -33,7 +34,23 @@ class TUI:
             if prompt.strip().lower() in {"exit", "quit", "q", ""}:
                 return session.close()
 
-            session.handle(prompt)
+            # Handle the prompt and get the final content
+            content = session.handle(prompt)
+
+            # Display the final output
+            print("\033[32mOutput:\033[0m")
+            if isinstance(content, list):
+                for block in content:
+                    if hasattr(block, "text"):
+                        print(f"Text: {block.text}")
+                    elif hasattr(block, "thinking"):
+                        print(f"Thinking: {block.thinking}")
+                    else:
+                        print(f"Unknown: {block}")
+            else:
+                print(content)
+
+            print()
 
 
 if __name__ == "__main__":
@@ -42,7 +59,7 @@ if __name__ == "__main__":
             agent=AnthropicAgent(name="main", 
                 base_url=BASE_URL, 
                 model_id=MODEL,
-                tools=[bash],
+                tools=[run_bash],
                 system_prompt=SYSTEM_PROMPT
             )
         )

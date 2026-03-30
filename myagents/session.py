@@ -22,7 +22,7 @@ class Session:
         # register main agent's tools
         self._tool_manager.register_tools(*agent.tools)
 
-    def handle(self, prompt: str) -> None:
+    def handle(self, prompt: str):
         # Append user turn
         input_message = {"role": "user", "content": prompt}
         self._history.append(input_message)
@@ -30,22 +30,9 @@ class Session:
         # Run the agent loop until it stops
         self._agent_loop()
 
-        # Display the final output
-        print("\033[32mOutput:\033[0m")
         final_message = self._history[-1]
         content = final_message["content"]
-        if isinstance(content, list):
-            for block in content:
-                if hasattr(block, "text"):
-                    print(f"Text: {block.text}")
-                elif hasattr(block, "thinking"):
-                    print(f"Thinking: {block.thinking}")
-                else:
-                    print(f"Unknown: {block}")
-        else:
-            print(content)
-
-        print()
+        return content
 
     def _agent_loop(self):
         while True:
@@ -63,11 +50,13 @@ class Session:
             results = []
             for block in response.content:
                 if block.type == "tool_use":
-                    print(f"\033[33mTool$ {block.input['command']}\033[0m")
+                    tool_name = block.name
+                    tool_kwargs = block.input
+                    print(f"\033[33mTool {tool_name} {tool_kwargs}\033[0m")
                     output = self._tool_manager.execute(
                         allowed_tools=self._main_agent.allowed_tools, 
-                        tool_name=block.name, 
-                        **block.input
+                        tool_name=tool_name, 
+                        **tool_kwargs
                     )
                     print(truncate(output))
                     results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
