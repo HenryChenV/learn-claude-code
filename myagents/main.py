@@ -114,10 +114,9 @@ class Session:
     _main_agent: Agent
     _sub_agents: dict[str, Agent]
 
-    def __init__(self, main: Agent, subs: list[Agent] = []) -> None:
+    def __init__(self, agent: Agent) -> None:
         self._history = []
-        self._main_agent = main
-        self._sub_agents = {a.name(): a for a in subs}
+        self._main_agent = agent
 
     def handle(self, prompt: str) -> None:
         # Append user turn
@@ -146,7 +145,9 @@ class Session:
 
     def _agent_loop(self):
         while True:
+            # Agent takes a step
             response = self._main_agent.step(self._history)
+
             # Append assistant turn
             self._history.append({"role": "assistant", "content": response.content})
 
@@ -154,7 +155,7 @@ class Session:
             if response.stop_reason != "tool_use":
                 return
 
-            # Execute each tool call, collect results
+            # Execute each tool call, collect results, or call sub-agents as needed, and append results to history for next step
             results = []
             for block in response.content:
                 if block.type == "tool_use":
@@ -193,7 +194,7 @@ class TUI:
 if __name__ == "__main__":
     TUI.run(
         Session(
-            main=Agent(name="main", 
+            agent=Agent(name="main", 
                 base_url=BASE_URL, 
                 model_id=MODEL,
                 tools=["bash"],
