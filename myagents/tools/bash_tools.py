@@ -7,7 +7,7 @@ from .base import Tool, FunctionTool
 DANGEROUS_COMMANDS = frozenset({"rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"})
 
 
-@FunctionTool.wrapper()
+@FunctionTool.wrapper(name="bash")
 def run_bash(command: str) -> str:
     """ Run a shell command
     """

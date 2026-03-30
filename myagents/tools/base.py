@@ -1,8 +1,8 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-import enum
 import inspect
-from typing import Callable, Dict, List, get_args, get_origin
+from typing import Callable, Dict, List, get_args, get_origin, overload
+from typing_extensions import override
 
 import jsonschema
 
@@ -52,17 +52,37 @@ class FunctionTool(Tool):
         super().__init__(name=name, description=description, input_schema=input_schema)
         self._func = func
 
+    @override
     def _run(self, **kwargs) -> str:
         return self._func(**kwargs)
 
     @classmethod
+    @overload
     def wrapper(
-        cls, 
+        cls,
+        func: Callable[..., str],
+    ) -> 'FunctionTool': ...
+
+    @classmethod
+    @overload
+    def wrapper(
+        cls,
+        *,
         name: str | None = None, 
         description: str | None = None, 
-        input_schema: dict | None = None):
+        input_schema: dict | None = None
+    ) -> Callable[..., 'FunctionTool']: ...
 
-        def decerator(func: Callable[..., str]) -> FunctionTool:
+    @classmethod
+    def wrapper(
+        cls, 
+        func: Callable[..., str] | None = None,
+        *,
+        name: str | None = None, 
+        description: str | None = None, 
+        input_schema: dict | None = None) -> Callable[..., 'FunctionTool'] | 'FunctionTool':
+
+        def decorator(func: Callable[..., str]) -> 'FunctionTool':
             tool_name = name or func.__name__
             tool_description = description or func.__doc__
             tool_input_schema = input_schema or cls._infer_schema(func)
@@ -74,9 +94,12 @@ class FunctionTool(Tool):
             if not tool_input_schema:
                 raise ValueError(f"Failed to infer tool input schema from function {func}. Please provide an input_schema.")
 
-            return FunctionTool(func=func, name=tool_name, description=tool_description, input_schema=tool_input_schema)
+            return cls(func=func, name=tool_name, description=tool_description, input_schema=tool_input_schema)
 
-        return decerator
+        if func is None:
+            return decorator
+
+        return decorator(func)
 
     @classmethod
     def _infer_schema(cls, func: Callable[..., str]) -> dict:
@@ -129,27 +152,6 @@ class FunctionTool(Tool):
             return {"type": "object", "additionalProperties": cls.py_type_to_json_schema(value_type)}
 
         raise ValueError(f"Unsupported parameter type: {py_type}")
-
-
-def function_tool_wrapper(
-        name: str | None = None, 
-        description: str | None = None, 
-        input_schema: dict | None = None):
-
-    def infer_schema(func: Callable) -> dict | None:
-        sig = inspect.signature(func)
-        properties = {}
-        required = []
-
-        for name, param in sig.parameters.items():
-            if param.default is param.empty:
-                required.append(name)
-            properties[name] = {"type": "string"}
-        return input_schema
-
-    def decorator(func: Callable) -> FunctionTool:
-        return FunctionTool(name=name, description=description, input_schema=input_schema, func=func)
-    return decorator
 
 
 class ToolRegistry:

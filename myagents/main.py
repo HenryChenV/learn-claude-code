@@ -3,7 +3,7 @@ import os
 from dotenv import load_dotenv
 
 from agent import AnthropicAgent
-from tools import run_bash
+from tools import run_bash, read_file, write_file, edit_file
 from session import Session
 
 
@@ -59,7 +59,7 @@ if __name__ == "__main__":
             agent=AnthropicAgent(name="main", 
                 base_url=BASE_URL, 
                 model_id=MODEL,
-                tools=[run_bash],
+                tools=[run_bash, read_file, write_file, edit_file],
                 system_prompt=SYSTEM_PROMPT
             )
         )
