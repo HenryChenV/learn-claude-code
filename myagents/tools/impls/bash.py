@@ -1,7 +1,7 @@
 import os
 import subprocess
 
-from .base import Tool, FunctionTool
+from ..core import FunctionTool
 
 
 DANGEROUS_COMMANDS = frozenset({"rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"})

@@ -8,7 +8,7 @@ from typing import Iterable, Union
 from anthropic import Anthropic, Omit, omit
 from anthropic.types import Message, TextBlockParam
 
-from tools import Tool
+from .tools.core import Tool
 
 
 class AnthropicAgent:

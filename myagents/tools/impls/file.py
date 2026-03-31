@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from .base import FunctionTool
+from ..core import FunctionTool
 
 
 WORKDIR = Path.cwd()
