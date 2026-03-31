@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.panel import Panel
+from rich.syntax import Syntax
 
 from .agent import AnthropicAgent
 from .tools.impls import (
@@ -50,7 +51,8 @@ class TUI:
 
             # Get user input
             try:
-                prompt = input(f"\033[36mInput[{i}]: \033[0m")
+                self._console.print(f"[bold cyan]Input[{i}]:[/bold cyan] ", end="")
+                prompt = input()
             except (EOFError, KeyboardInterrupt):
                 return session.close()
             if prompt.strip().lower() in {"exit", "quit", "q", ""}:
@@ -69,7 +71,6 @@ class TUI:
                 return None
 
             case ThinkingEvent(thinking=thinking):
-                #print(f"\033[35mThinking: {thinking}\033[0m")
                 self._console.print("[bold magenta]Thinking:[/bold magenta]")
                 md = Markdown(thinking)
                 self._console.print(Padding(md, (0, 0, 0, 4)))
@@ -79,29 +80,28 @@ class TUI:
                 self._console.print(Padding(Markdown(content), (0, 0, 0, 4)))
 
             case AssistantErrorEvent(error=error):
-                # print(f"\033[31mAssistant Error: {error}\033[0m")
                 self._console.print("[bold red]Assistant Error:[/bold red]")
                 self._console.print(Padding(str(error), (0, 0, 0, 4)))
 
             case ToolUseEvent(tool_name=tool_name, tool_use_id=tool_use_id, tool_input=tool_input):
-                print(f"\033[33mToolUse[{tool_use_id}]: {tool_name}({tool_input})\033[0m")
-                self._console.print(f"[bold yellow]ToolUse[{tool_use_id}]:[/bold yellow]")
-                content = f"{tool_name}({tool_input})"
-                self._console.print(Padding(content, (0, 0, 0, 4)))
+                full_content = f"[bold yellow]ToolUse([dim]{tool_use_id}[/dim]):[/bold yellow] {tool_name}({tool_input})"
+                self._console.print(Padding(full_content, (0, 0, 0, 0)))
 
             case ToolResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, tool_output=tool_output):
-                # print(f"\033[34mToolResult[{tool_use_id}]: {tool_name} -> {tool_output}\033[0m")
-                self._console.print(f"[bold blue]ToolResult[{tool_use_id}]:[/bold blue]")
-                content = f"{tool_name} -> {tool_output}"
-                self._console.print(Padding(content, (0, 0, 0, 4)))
+                self._console.print(f"[bold blue]ToolResult([dim]{tool_use_id}[/dim]):[/bold blue]")
+                
+                if tool_name == "bash":
+                    syntax = Syntax(tool_output, "bash", theme="monokai", line_numbers=False)
+                    self._console.print(Padding(syntax, (0, 0, 0, 4)))
+                else:
+                    content = f"{tool_name} -> {tool_output}"
+                    self._console.print(Padding(content, (0, 0, 0, 4)))
 
             case UnknownEvent(data=data):
-                # print(f"\033[31mUnknown event: {data}\033[0m")
                 self._console.print("[bold red]Unknown event:[/bold red]")
                 self._console.print(Padding(str(data), (0, 0, 0, 4)))
 
             case _:
-                # print(f"\033[31mUnhandled event: {event}\033[0m")
                 self._console.print("[bold red]Unhandled event:[/bold red]")
                 self._console.print(Padding(str(event), (0, 0, 0, 4)))
 
