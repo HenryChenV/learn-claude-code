@@ -14,18 +14,23 @@ def safe_path(p: str) -> Path:
 
 
 @FunctionTool.wrapper
-def read_file(path: str, limit: int | None = None) -> str:
-    """Read file contents with optional line limit. 
+def read_file(path: str, limit: int = 50000) -> str:
+    """Read file contents with optional line limit (default is 50000). 
     """
     try:
-        with open(safe_path(path), "r") as f:
-            lines = []
-            for line in f:
+        lines: list[str] = []
+        with safe_path(path).open("r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if i >= limit:
+                    return "".join(lines) + f"... (truncated, showing first {limit} lines)\n"
                 lines.append(line)
-                if limit is not None and len(lines) >= limit:
-                    lines.append(f"... ({len(lines) - limit} more lines)")
-                    break
-            return "\n".join(lines)
+
+        return "".join(lines)
+
+    except FileNotFoundError:
+        return f"Error: file not found: {path}"
+    except UnicodeDecodeError:
+        return f"Error: file is not valid UTF-8 text: {path}"
     except Exception as e:
         return f"Error: failed to read {path}: {e}"
 
@@ -37,26 +42,22 @@ def write_file(path: str, content: str) -> str:
     try:
         p = safe_path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w") as f:
-            f.write(content)
+        p.write_text(content)
         return f"Successfully wrote {len(content)} characters to {path}"
     except Exception as e:
         return f"Error: failed to write to {path}: {e}"
 
 
 @FunctionTool.wrapper
-def edit_file(path: str, new_content: str) -> str:
+def edit_file(path: str, old_content, new_content: str) -> str:
     """Edit a file by replacing exact text in file.
     """
     try:
-        p = safe_path(path)
-        old_content = ""
-        if p.exists():
-            with open(p, "r") as f:
-                old_content = f.read()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        with open(p, "w") as f:
-            f.write(new_content)
-        return f"Successfully edited {path}."
+        fp = safe_path(path)
+        content = fp.read_text()
+        if old_content not in content:
+            return f"Error: Text not found in {path}"
+        fp.write_text(content.replace(old_content, new_content, 1))
+        return f"Edited {path}"
     except Exception as e:
         return f"Error: failed to edit {path}: {e}"
