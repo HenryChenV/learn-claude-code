@@ -3,6 +3,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from enum import Enum
 import inspect
 from types import UnionType
 from typing import Dict, List, Union, get_args, get_origin, overload
@@ -39,13 +40,6 @@ class Tool(ABC):
     @abstractmethod
     def _run(self, **kwargs) -> str:
         pass
-
-    def to_anthropic_tool(self) -> dict:
-        return {
-            "name": self.name,
-            "description": self.description,
-            "input_schema": self.input_schema,
-        }
 
 
 class FunctionTool(Tool):
@@ -165,8 +159,29 @@ class FunctionTool(Tool):
 
         # Union
         if origin in (Union, UnionType):
-            return {
-                "oneOf": [cls.py_type_to_json_schema(arg) for arg in args]
-            }
+            return {"oneOf": [cls.py_type_to_json_schema(arg) for arg in args]}
+
+        # Enum
+        if isinstance(py_type, type) and issubclass(py_type, Enum):
+            values = [e.value for e in py_type]
+
+            value_types = {type(v) for v in values}
+            if len(value_types) == 1:
+                t = value_types.pop()
+                if t is int:
+                    json_type = "integer"
+                elif t is float:
+                    json_type = "number"
+                elif t is bool:
+                    json_type = "boolean"
+                else:
+                    json_type = "string"
+            else:
+                # mixed type
+                json_type = "string"
+
+            enum_desc = ",".join([f"{e.name}={e.value}" for e in py_type])
+
+            return {"type": json_type, "enum": values, "description": f"Enum values: {enum_desc}"}
 
         raise ValueError(f"Unsupported parameter type: {py_type}")

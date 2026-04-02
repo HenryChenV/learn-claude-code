@@ -14,7 +14,7 @@ class ToolRegistry:
 
     def register(self, tool: Tool) -> None:
         if tool.name in self._tools:
-            print(f"Tool with name '{tool.name}' is already registered and will be overwritten.")
+            raise ValueError(f"Tool with name '{tool.name}' is already registered")
         self._tools[tool.name] = tool
 
     def get(self, name: str) -> Tool:

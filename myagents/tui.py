@@ -7,7 +7,8 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from .agent import AnthropicAgent
+from .agent import Agent
+from .tools.core import Tool
 from .tools.impls import (
     run_bash, 
     read_file, 
@@ -107,10 +108,17 @@ class TUI:
 
 
 if __name__ == "__main__":
-    TUI().run(Session(agent=AnthropicAgent(
-        name="main", 
-        base_url=BASE_URL, 
-        model_id=MODEL,
-        tools=[run_bash, read_file, write_file, edit_file],
-        system_prompt=SYSTEM_PROMPT
-    )))
+    buildin_tools: list[Tool] = [run_bash, read_file, write_file, edit_file]
+    TUI().run(
+        Session(
+            agent=Agent(
+                name="main", 
+                base_url=BASE_URL, 
+                model_id=MODEL,
+                allowed_tools=[t.name for t in buildin_tools],
+                system_prompt=SYSTEM_PROMPT
+            ),
+            tools=buildin_tools,
+            middlewares=[]
+        ),
+    )

@@ -7,12 +7,16 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Optional, Protocol
 from anthropic.types import ContentBlock
 from typing_extensions import override
+import traceback
 
-from .agent import AnthropicAgent
-from .tools.core import ToolManager
+from myagents.tools.core.provider import ToolProvider
+from myagents.tools.core.registry import ToolRegistry
+
+from .agent import Agent
+from .tools.core import Tool, ToolManager
 from .utils import truncate
 
 
@@ -27,7 +31,7 @@ class EventType(Enum):
 class Role(Enum):
     USER = "user"
     ASSISTANT = "assistant"
-    HARNESS = "harness"
+    SYSTEM = "system"
     UNKNOWN = "unknown"
 
 @dataclass(frozen=True, kw_only=True)
@@ -63,12 +67,12 @@ class UserEvent(Event, ABC):
 
 
 @dataclass(frozen=True, kw_only=True)
-class HarnessEvent(Event, ABC):
+class SystemEvent(Event, ABC):
 
     @property
     @override
     def role(self) -> Role:
-        return Role.HARNESS
+        return Role.SYSTEM
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -94,12 +98,13 @@ class ToolUseEvent(AssistantEvent):
     tool_input: dict[str, Any]
 
 
+@dataclass(frozen=True)
 class AssistantErrorEvent(AssistantEvent):
     error: Any
 
 
 @dataclass(frozen=True)
-class ToolResultEvent(HarnessEvent):
+class ToolResultEvent(SystemEvent):
     tool_name: str
     tool_use_id: str
     tool_output: str
@@ -144,19 +149,42 @@ class EventFactory:
             return UnknownEvent(data=block)
 
 
+class BuildinToolProvider:
+
+    _tools: dict[str, Tool]
+
+    def __init__(self, tools: list[Tool]):
+        self._tools = {t.name: t for t in tools}
+
+    def get_tools(self):
+        return self._tools
+
+
 class Session:
 
-    _main_agent: AnthropicAgent
-    _sub_agents: dict[str, AnthropicAgent]
+    _main_agent: Agent
     _tool_manager: ToolManager
 
-    def __init__(self, agent: AnthropicAgent) -> None:
+    def __init__(self, 
+                 agent: Agent, 
+                 tools: list[Tool] = [], 
+                 middlewares: list['SessionMiddleware'] = []) -> None:
+
         self._history = []
         self._main_agent = agent
         self._tool_manager = ToolManager()
 
-        # register main agent's tools
-        self._tool_manager.register_tools(*agent.tools)
+        self._tool_manager.add_provider(BuildinToolProvider(tools))
+
+        for middleware in middlewares:
+            middleware.post_init(self)
+
+    def add_tool_provider(self, provider: ToolProvider):
+        self._tool_manager.add_provider(provider)
+
+    @property
+    def tool_manager(self):
+        return self._tool_manager
 
     def stream(self, prompt: str):
         # Append user turn
@@ -170,9 +198,9 @@ class Session:
         while True:
             # Agent takes a step
             try:
-                response = self._main_agent.step(self._history)
+                response = self._main_agent.step(self._history, self._resolve_tools_for(self._main_agent))
             except Exception as e:
-                yield UnknownEvent(data=f"Error during agent step: {e}")
+                yield AssistantErrorEvent(error=f"Error during agent step: {e}:\n{traceback.format_exc()}")
                 return
 
             # Append assistant turn
@@ -197,7 +225,7 @@ class Session:
                     # Tool call
                     output = self._tool_manager.execute(
                         allowed_tools=self._main_agent.allowed_tools, 
-                        tool_name=tool_name, 
+                        target_tool=tool_name, 
                         **tool_kwargs
                     )
 
@@ -208,7 +236,17 @@ class Session:
 
             self._history.append({"role": "user", "content": results})
 
+    def _resolve_tools_for(self, agent: Agent) -> list[Tool]:
+        return self._tool_manager.get_tools_by_names(
+            agent.allowed_tools, 
+            raise_if_nonexits=True
+        )
+
     def close(self):
         print("Exiting.")
         self._main_agent.close()
 
+
+class SessionMiddleware(Protocol):
+
+    def post_init(self, session: Session) -> None: ...
