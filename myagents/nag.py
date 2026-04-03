@@ -36,9 +36,10 @@ class Step:
     def complete(self):
         self._status = Status.DONE
 
-    @property
-    def desc(self):
+    def __str__(self):
         return f"{self._desc} [{self._status.name}]"
+
+    __repr__ = __str__
 
 
 class Task:
@@ -83,14 +84,14 @@ class Task:
         if self._status is Status.DONE:
             return f"Task{self._name}[{len(self._steps)}/{len(self._steps)}] is Done."
         if self._status is Status.TODO:
-            return f"Task{self._name}[0/{len(self._steps)}] is not started. The first step is f{self._steps[0].desc}"
+            return f"Task{self._name}[0/{len(self._steps)}] is not started. The first step is f{self._steps[0]}"
         if self._status is Status.DOING:
             return f"Task{self._name}[{self._current_step_index+1}/{len(self._steps)}] is Doing. Current Step is f{self._steps[self._current_step_index]}"
         raise ValueError(f"Unknown status {self._status}")
 
     @property
     def detail(self) -> str:
-        return "\n".join([self._name + ":"] + [f"Step{i+1}: {s.desc}" for i, s in enumerate(self._steps)])
+        return "\n".join([self._name + ":"] + [f"Step{i+1}: {s}" for i, s in enumerate(self._steps)])
 
     def is_done(self):
         return self._status is Status.DONE

@@ -24,7 +24,7 @@ class ToolManager:
         self._providers.remove(provider)
         self._invalid_tools_cache()
 
-    def get_tools_by_names(self, names: list[str], raise_if_nonexits=False):
+    def resolve_tools(self, names: list[str], raise_if_nonexits=False):
         tools = []
         for name in names:
             if name not in self.tool_map:
@@ -67,9 +67,6 @@ class ToolManager:
             return f"Error executing tool '{target_tool}': {e}"
 
     def _execute(self, allowed_tools: list[str], target_tool: str, **kwargs) -> str:
-        if target_tool not in allowed_tools:
-            raise ValueError(f"Tool '{target_tool}' is not in the list of allowed tools.")
-
         if target_tool not in self.tool_map:
             raise ValueError(f"Tool '{target_tool}' is not supported.")
 
