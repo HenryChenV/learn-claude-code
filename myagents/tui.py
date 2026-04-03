@@ -7,6 +7,10 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 
+from .nag import NagSystem
+
+from .utils import truncate
+
 from .agent import Agent
 from .tools.core import Tool
 from .tools.impls import (
@@ -92,7 +96,7 @@ class TUI:
                 self._console.print(f"[bold blue]ToolResult([dim]{tool_use_id}[/dim]):[/bold blue]")
                 
                 if tool_name == "bash":
-                    syntax = Syntax(tool_output, "bash", theme="monokai", line_numbers=False)
+                    syntax = Syntax(truncate(tool_output, 100), "bash", theme="monokai", line_numbers=False)
                     self._console.print(Padding(syntax, (0, 0, 0, 4)))
                 else:
                     content = f"{tool_name} -> {tool_output}"
@@ -115,10 +119,10 @@ if __name__ == "__main__":
                 name="main", 
                 base_url=BASE_URL, 
                 model_id=MODEL,
-                allowed_tools=[t.name for t in buildin_tools],
+                allowed_tools=[t.name for t in buildin_tools] + ["create_task", "start_task", "complete_task", "get_task_progress", "get_task_details"],
                 system_prompt=SYSTEM_PROMPT
             ),
             tools=buildin_tools,
-            middlewares=[]
+            middlewares=[NagSystem()]
         ),
     )

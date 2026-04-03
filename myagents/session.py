@@ -151,12 +151,12 @@ class EventFactory:
 
 class BuildinToolProvider:
 
-    _tools: dict[str, Tool]
+    _tools: list[Tool]
 
     def __init__(self, tools: list[Tool]):
-        self._tools = {t.name: t for t in tools}
+        self._tools = tools
 
-    def get_tools(self):
+    def get_tools(self) -> list[Tool]:
         return self._tools
 
 
