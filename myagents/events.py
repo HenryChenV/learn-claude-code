@@ -95,6 +95,12 @@ class AssistantErrorEvent(AssistantEvent):
 
 
 @dataclass(frozen=True)
+class SystemWarnEvent(SystemEvent):
+    source: str
+    content: Any
+
+
+@dataclass(frozen=True)
 class ToolResultEvent(SystemEvent):
     tool_name: str
     tool_use_id: str

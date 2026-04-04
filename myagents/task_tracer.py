@@ -4,16 +4,15 @@
 """
 
 
-from dataclasses import dataclass
 from enum import Enum
-from multiprocessing import Value
-from multiprocessing.spawn import prepare
-import stat
+from mailbox import Message
+from typing_extensions import override
 
-from attr import frozen
+from anthropic.types import Message
 
 from .session import Session, SessionMiddleware
 from .tools.core import Tool, FunctionTool
+from .events import Event, SystemWarnEvent
 
 
 class Status(Enum):
@@ -48,6 +47,8 @@ class Task:
     _steps: list[Step]
     _current_step_index: int
     _status: Status
+
+    _idle_steps: int
     
     def __init__(self, name: str, steps: list[str]):
         if not steps:
@@ -86,7 +87,8 @@ class Task:
         if self._status is Status.TODO:
             return f"Task{self._name}[0/{len(self._steps)}] is not started. The first step is f{self._steps[0]}"
         if self._status is Status.DOING:
-            return f"Task{self._name}[{self._current_step_index+1}/{len(self._steps)}] is Doing. Current Step is {self._steps[self._current_step_index]}"
+            return (f"Task{self._name}[{self._current_step_index+1}/{len(self._steps)}] is in progress." 
+                    f"Current Step is {self._steps[self._current_step_index]}")
         raise ValueError(f"Unknown status {self._status}")
 
     @property
@@ -97,6 +99,17 @@ class Task:
         return self._status is Status.DONE
 
 
+class CreateTaskFailure(RuntimeError):
+
+    _comment: str
+
+    def __init__(self, comment: str):
+        self._comment= comment
+
+    def __str__(self) -> str:
+        return f"{self.__class__.__name__}: {self._comment}"
+
+
 class TaskManager:
     """ trace the tasks
     """
@@ -104,15 +117,26 @@ class TaskManager:
     # At most one task is allowed. Maybe support multi-task in the future
     _current_task: Task | None
     _task_tools: list[Tool] | None
+    _task_tool_names: list[str] | None
 
     def __init__(self):
         self._current_task = None
         self._task_tools = None
+        self._task_tool_names = None
 
     def create_task(self, task_name: str, steps: list[str]):
         if self._current_task is not None and not self._current_task.is_done():
             raise RuntimeError(f"Current Task is not Done. Progress: {self._current_task.progress}")
-        self._current_task = Task(task_name, steps)
+        task = Task(task_name, steps)
+        print(f"Task: {task.detail}\n")
+        comment = input("type 'yes' to approve the task," 
+                        " or the operation will be interrupted with message you typed.\n "
+                        "Comment: ")
+
+        if comment != "yes":
+            raise CreateTaskFailure(f"User disapproved: {comment}")
+
+        self._current_task = task
         return self._current_task.detail
 
     def start_task(self) -> str:
@@ -120,10 +144,13 @@ class TaskManager:
             raise RuntimeError("no task yet")
         return self._current_task.start()
 
-    def complete(self, step_no: int):
+    def complete_step(self, step_no: int):
         if self._current_task is None:
             raise RuntimeError("no task yet")
         return self._current_task.complete(step_no)
+
+    def has_uncompleted_task(self) -> bool:
+        return self._current_task is not None and not self._current_task.is_done()
 
     @property
     def current_task_progress(self) -> str:
@@ -142,8 +169,11 @@ class TaskManager:
 
             @FunctionTool.wrapper(required_capabilities="task.create")
             def create_task(task_name: str, steps: list[str]) -> str:
-                """ Create task with task name and steps. Task detail will be returned.
+                """ Create task with task name and steps. 
+                    You have to confirme with user before creating the task.
                     Use complete_task to complete each step when it is completed.
+                    If the task status is not updated for more than 3 rounds,
+                    you will receive a notification from TaskTracker.
                 """
                 return self.create_task(task_name, steps)
 
@@ -157,7 +187,7 @@ class TaskManager:
             def complete_task(step_no: int):
                 """ complete one of step of task with no of step.
                 """
-                return self.complete(step_no)
+                return self.complete_step(step_no)
 
             @FunctionTool.wrapper(required_capabilities="task.progress.get")
             def get_task_progress():
@@ -178,8 +208,15 @@ class TaskManager:
                 get_task_progress, 
                 get_task_details
             ]
+            self._task_tool_names = [t.desc.name for t in self._task_tools]
 
         return self._task_tools
+
+    @property
+    def tool_names(self) -> list[str]:
+        if self._task_tool_names is None:
+            self.get_tools()
+        return self._task_tool_names or []
 
 
 class TaskTracker(SessionMiddleware):
@@ -187,9 +224,55 @@ class TaskTracker(SessionMiddleware):
     """
 
     _task_manager: TaskManager
+    _idle_steps: int
+    _max_idle_steps: int
 
-    def __init__(self):
+    def __init__(self, max_idle_steps=3):
         self._task_manager = TaskManager()
+        self._idle_steps = 0
+        self._max_idle_steps = max_idle_steps
 
-    def post_init(self, session: Session) -> None:
+    @override
+    def post_session_init(self, session: Session) -> None:
         session.add_tool_provider(self._task_manager)
+
+    @override
+    def post_agent_step(self, session: Session, resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
+        if not self._task_manager.has_uncompleted_task() or not self._task_manager.tool_names:
+            # no uncompleted task, nothing to trace
+            return [], loop_completed
+
+        idle = True
+        if resp.stop_reason == "tool_use":
+            for block in resp.content:
+                if block.type != "tool_use":
+                    continue
+
+                tool_name = block.name
+                if tool_name in self._task_manager.tool_names:
+                    idle = False
+                    break
+
+        if not idle:
+            self._reset_idle_steps()
+            return [], loop_completed
+
+        self._idle_steps += 1
+        if self._idle_steps >= self._max_idle_steps:
+            content = (f"TaskTracker(I'm not user, just a task tracker): "
+                       f"You have uncompleted task "
+                       f"and don't update the status for at least {self._max_idle_steps} rounds." 
+                       f"The progress is {self._task_manager.current_task_progress}. " 
+                       f"Please update the task status or explain why you cannot.")
+
+            session.append_message(role="user", content=content)
+
+            self._reset_idle_steps()
+
+            return [SystemWarnEvent("TaskTracker", content=content)], False
+
+        return [], loop_completed
+
+    def _reset_idle_steps(self):
+        self._idle_steps = 0
+
