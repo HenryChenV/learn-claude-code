@@ -16,7 +16,7 @@ from .events import *
 from .history import History
 
 
-class BuildinToolProvider:
+class SessionBuildinToolProvider:
 
     _tools: list[Tool]
 
@@ -35,14 +35,12 @@ class Session:
 
     def __init__(self, 
                  agent: Agent, 
-                 tools: list[Tool] = [], 
+                 tool_providers: list[ToolProvider],
                  middlewares: list['SessionMiddleware'] = []) -> None:
 
         self._history = History()
         self._agent = agent
-        self._tool_manager = ToolManager()
-
-        self._tool_manager.add_provider(BuildinToolProvider(tools))
+        self._tool_manager = ToolManager(initial_providers=tool_providers)
 
         for middleware in middlewares:
             middleware.post_init(self)
@@ -56,7 +54,10 @@ class Session:
         yield UserPromptEvent(prompt=prompt)
 
         # Run the agent loop until it stops
-        yield from self._agent.run(AgentRunContext(self._tool_manager, self._history))
+        yield from self._agent.run(AgentRunContext(
+            self._history,
+            self._tool_manager, 
+        ))
 
     def close(self):
         print("Exiting.")

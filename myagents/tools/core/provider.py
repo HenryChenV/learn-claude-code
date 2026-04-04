@@ -9,4 +9,10 @@ from .tool import Tool
 
 class ToolProvider(Protocol):
 
-    def get_tools(self) -> list[Tool]: ...
+    def get_tools(self) -> list[Tool]: 
+        """get all tools
+
+        Returns:
+            all tools
+        """
+        ...

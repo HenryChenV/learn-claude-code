@@ -7,7 +7,7 @@ from rich.padding import Padding
 from rich.panel import Panel
 from rich.syntax import Syntax
 
-from .nag import NagSystem
+from .task_tracer import TaskTracker
 
 from .utils import truncate
 
@@ -22,7 +22,8 @@ from .tools.impls import (
 from .session import (
     AssistantErrorEvent, 
     AssitantTextEvent, 
-    Session, Event, 
+    Session, Event,
+    SessionBuildinToolProvider, 
     ThinkingEvent, 
     ToolResultEvent, 
     ToolUseEvent, 
@@ -112,17 +113,16 @@ class TUI:
 
 
 if __name__ == "__main__":
-    buildin_tools: list[Tool] = [run_bash, read_file, write_file, edit_file]
     TUI().run(
         Session(
             agent=Agent(
                 name="main", 
                 base_url=BASE_URL, 
                 model_id=MODEL,
-                allowed_tools=[t.name for t in buildin_tools] + ["create_task", "start_task", "complete_task", "get_task_progress", "get_task_details"],
+                allowed_capabilities=["bash", "file.*", "!task.edit", "task.*", "!task.start", "!task.details.*"],
                 system_prompt=SYSTEM_PROMPT
             ),
-            tools=buildin_tools,
-            middlewares=[NagSystem()]
+            tool_providers=[SessionBuildinToolProvider([run_bash, read_file, write_file, edit_file])],
+            middlewares=[TaskTracker()],
         ),
     )

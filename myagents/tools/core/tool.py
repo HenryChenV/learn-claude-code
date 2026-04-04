@@ -2,7 +2,7 @@
 """
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 import inspect
 from types import UnionType
@@ -13,8 +13,9 @@ import jsonschema
 
 
 @dataclass(frozen=True)
-class Tool(ABC):
-
+class ToolDesc:
+    """Description of the Tool
+    """
     name: str
     description: str
     input_schema: dict
@@ -27,48 +28,61 @@ class Tool(ABC):
         if not self.input_schema:
             raise ValueError("Tool input_schema cannot be empty.")
 
+
+@dataclass(frozen=True)
+class Tool(ABC):
+
+    desc: ToolDesc
+    required_capabilities: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        # make required_capablities immuatable
+        object.__setattr__(
+            self, 
+            'required_capabilities', 
+            tuple(self.required_capabilities)
+        )
+
     def __call__(self, **kwargs) -> str:
         self._validate(kwargs)
         return self._run(**kwargs)
 
     def _validate(self, kwargs):
         try:
-            jsonschema.validate(instance=kwargs, schema=self.input_schema)
+            jsonschema.validate(instance=kwargs, schema=self.desc.input_schema)
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Invalid input for tool '{self.name}': {e.message}")
+            raise ValueError(f"Invalid input for tool '{self.desc.name}': {e.message}")
 
     @abstractmethod
     def _run(self, **kwargs) -> str:
         pass
 
 
+@dataclass(frozen=True, kw_only=True)
 class FunctionTool(Tool):
 
-    _func: Callable[..., str]
-
-    def __init__(self, func: Callable[..., str], name: str, description: str, input_schema: dict) -> None:
-        super().__init__(name=name, description=description, input_schema=input_schema)
-        self._func = func
+    func: Callable[..., str]
 
     @override
     def _run(self, **kwargs) -> str:
-        return self._func(**kwargs)
+        return self.func(**kwargs)
 
-    @classmethod
     @overload
+    @classmethod
     def wrapper(
         cls,
         func: Callable[..., str],
     ) -> 'FunctionTool': ...
 
-    @classmethod
     @overload
+    @classmethod
     def wrapper(
         cls,
         *,
         name: str | None = None, 
         description: str | None = None, 
-        input_schema: dict | None = None
+        input_schema: dict | None = None,
+        required_capabilities: str | list[str] = [],
     ) -> Callable[..., 'FunctionTool']: ...
 
     @classmethod
@@ -78,12 +92,18 @@ class FunctionTool(Tool):
         *,
         name: str | None = None, 
         description: str | None = None, 
-        input_schema: dict | None = None) -> Callable[..., 'FunctionTool'] | 'FunctionTool':
+        input_schema: dict | None = None,
+        required_capabilities: str | list[str] = [],
+    ) -> Callable[..., 'FunctionTool'] | 'FunctionTool':
 
         def decorator(func: Callable[..., str]) -> 'FunctionTool':
             tool_name = name or func.__name__
             tool_description = description or func.__doc__
             tool_input_schema = input_schema or cls._infer_schema(func)
+
+            tool_required_capabilities = required_capabilities or []
+            if isinstance(tool_required_capabilities, str):
+                tool_required_capabilities = [tool_required_capabilities]
 
             if not tool_name:
                 raise ValueError(f"Failed to infer tool name from function {func}. Please provide a name.")
@@ -92,7 +112,15 @@ class FunctionTool(Tool):
             if not tool_input_schema:
                 raise ValueError(f"Failed to infer tool input schema from function {func}. Please provide an input_schema.")
 
-            return cls(func=func, name=tool_name, description=tool_description, input_schema=tool_input_schema)
+            return cls(
+                desc=ToolDesc(
+                    name=tool_name, 
+                    description=tool_description, 
+                    input_schema=tool_input_schema,
+                ),
+                func=func, 
+                required_capabilities=tool_required_capabilities
+            )
 
         if func is None:
             return decorator

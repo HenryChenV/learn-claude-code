@@ -86,7 +86,7 @@ class Task:
         if self._status is Status.TODO:
             return f"Task{self._name}[0/{len(self._steps)}] is not started. The first step is f{self._steps[0]}"
         if self._status is Status.DOING:
-            return f"Task{self._name}[{self._current_step_index+1}/{len(self._steps)}] is Doing. Current Step is f{self._steps[self._current_step_index]}"
+            return f"Task{self._name}[{self._current_step_index+1}/{len(self._steps)}] is Doing. Current Step is {self._steps[self._current_step_index]}"
         raise ValueError(f"Unknown status {self._status}")
 
     @property
@@ -140,32 +140,32 @@ class TaskManager:
     def get_tools(self) -> list[Tool]:
         if self._task_tools is None:
 
-            @FunctionTool.wrapper
+            @FunctionTool.wrapper(required_capabilities="task.create")
             def create_task(task_name: str, steps: list[str]) -> str:
                 """ Create task with task name and steps. Task detail will be returned.
-                    Use complate_task to complete each step when it is completed.
+                    Use complete_task to complete each step when it is completed.
                 """
                 return self.create_task(task_name, steps)
 
-            @FunctionTool.wrapper
+            @FunctionTool.wrapper(required_capabilities="task.start")
             def start_task() -> str:
                 """start the task which means you will start the first step of the task.
                 """
                 return self.start_task()
 
-            @FunctionTool.wrapper
+            @FunctionTool.wrapper(required_capabilities="task.complete")
             def complete_task(step_no: int):
                 """ complete one of step of task with no of step.
                 """
                 return self.complete(step_no)
 
-            @FunctionTool.wrapper
+            @FunctionTool.wrapper(required_capabilities="task.progress.get")
             def get_task_progress():
                 """get progress of current task
                 """
                 return self.current_task_progress
 
-            @FunctionTool.wrapper
+            @FunctionTool.wrapper(required_capabilities="task.details.get")
             def get_task_details():
                 """ get the details of task
                 """
@@ -182,7 +182,9 @@ class TaskManager:
         return self._task_tools
 
 
-class NagSystem(SessionMiddleware):
+class TaskTracker(SessionMiddleware):
+    """ TaskTracker to trace the prcessing of task and send remind if necessary.
+    """
 
     _task_manager: TaskManager
 
