@@ -9,7 +9,7 @@ from rich.syntax import Syntax
 
 from myagents.events import SystemWarnEvent
 
-from .task_tracer import TaskTracker
+from .task_tracker import TaskTracker
 
 from .utils import truncate
 
