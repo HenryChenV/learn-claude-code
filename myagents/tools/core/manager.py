@@ -7,7 +7,7 @@ from json import tool
 from math import log
 from typing import Sequence
 
-from myagents.capability import CapabilityEvaluator, CapabilityRule
+from .capability import CapabilityEvaluator, CapabilityRule
 
 from .tool import Tool
 from .provider import ToolProvider

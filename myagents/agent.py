@@ -9,7 +9,7 @@ from typing import Iterable, Union
 from anthropic import Anthropic, Omit, omit
 from anthropic.types import Message, TextBlockParam
 
-from .capability import CapabilityRule
+from .tools.core.capability import CapabilityRule
 
 from .tools.core.manager import ToolManager
 
