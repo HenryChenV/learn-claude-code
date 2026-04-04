@@ -36,11 +36,13 @@ class Tool(ABC):
     required_capabilities: list[str] = field(default_factory=list)
 
     def __post_init__(self):
+        # make sure required_capabilities is not empty
+        required_capabilities = self.required_capabilities or ["default"]
         # make required_capablities immuatable
         object.__setattr__(
             self, 
             'required_capabilities', 
-            tuple(self.required_capabilities)
+            tuple(required_capabilities)
         )
 
     def __call__(self, **kwargs) -> str:

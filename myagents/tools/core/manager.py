@@ -40,19 +40,16 @@ class ToolManager:
 
     Attributes:
         _providers: tool providers
-        _tool_map_cache: cache for all tools as map, key is tool name and value is tool itself
         _resolved_tool_descs: 
             cache for resolved tool descs, key is frozenset of capacilities, value is tools
     """
 
     _providers: list[ToolProvider]
-    _tool_map_cache: dict[str, Tool] | None
     _resolved_tools_cache: dict[frozenset, ResolvedToolsCacheValue] | None
 
     def __init__(self, initial_providers: list[ToolProvider] = []):
         self._providers = []
 
-        self._tool_map_cache = None
         self._resolved_tools_cache = None
 
         if initial_providers:
@@ -124,15 +121,7 @@ class ToolManager:
                 allowed_tools[tool.desc.name] = tool
         return tuple(allowed_tools.values())
 
-    @property
-    def tool_map(self) -> dict[str, Tool]:
-        if self._tool_map_cache is None:
-            # build tools cache
-            self._tool_map_cache = self._get_tools_as_map()
-        return self._tool_map_cache
-
     def _invalid_tools_cache(self):
-        self._tool_map_cache = None
         self._resolved_tools_cache = None
 
     def _get_tools_as_map(self) -> dict[str, Tool]:
@@ -170,9 +159,6 @@ class ToolManager:
             return f"Error executing tool '{target_tool}': {e}"
 
     def _execute(self, allowed_capabilities: list[CapabilityRule], target_tool: str, **kwargs) -> str:
-        if target_tool not in self.tool_map:
-            raise ValueError(f"Tool '{target_tool}' is not found.")
-
         cached = self._get_or_resolved_tools_by_capabilities(allowed_capabilities)
 
         tool = cached.get_by_name(target_tool)
