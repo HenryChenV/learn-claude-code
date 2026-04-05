@@ -1,6 +1,6 @@
 import json
 import os
-from typing import Any
+from typing import Any, Optional, overload
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -24,7 +24,7 @@ from .events import (
     UnknownEvent, 
     UserPromptEvent
 )
-from .task_tracker import TaskTracker
+from .task_tracker import TaskTracker, TaskTrackerFactory
 from .utils import truncate
 from .agent import Agent
 from .tools.impls import (
@@ -59,13 +59,11 @@ class TUI:
         self._console = Console()
 
     def run(self, session: Session) -> None:
-        round = 1
         while True:
 
             # Get user input
             try:
-                self._console.print(f"[bold cyan][{round}] Input:[/bold cyan] ", end="")
-                prompt = input()
+                prompt = self.input(session)
             except (EOFError, KeyboardInterrupt):
                 return session.close()
 
@@ -78,61 +76,67 @@ class TUI:
             # Handle the prompt and get the final content
             for event in session.stream(prompt):
                 # Display the final output
-                self.print(round, event)
+                self.print(event)
 
             print()
 
-            round += 1
+    def input(self, session: Session) -> str:
+        header = self._format_header(
+            paths=[f"session:{session.sid.id}", f"round:{session.rounds + 1}"],
+            color=session.theme_color
+        )
+        self._console.print(header)
+        self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
+        return input()
 
-    def print(self, round: int, event: Event) -> str | None:
+    def print(self, event: Event) -> str | None:
         match event:
             case UserPromptEvent(prompt=prompt):
                 return None
 
-            case ThinkingEvent(source_role=source_role, source_name=source_name, 
-                               thinking=thinking):
+            case ThinkingEvent(thinking=thinking):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="Thinking", color="magenta"
                     ),
-                    Markdown(thinking)
+                    body=Markdown(thinking),
                 )
 
-            case AssitantOutputEvent(source_role=source_role, source_name=source_name, 
-                                     content=content):
+            case AssitantOutputEvent(content=content):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="Output", color="green"
                     ),
-                    Markdown(content)
+                    body=Markdown(content)
                 )
 
-            case AssistantErrorEvent(source_role=source_role, source_name=source_name, 
-                                     error=error):
+            case AssistantErrorEvent(error=error):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="Error", color="red"
                     ),
-                    Markdown(str(error))
+                    body=Markdown(str(error))
                 )
 
-            case ToolUseEvent(source_role=source_role, source_name=source_name, 
-                              tool_name=tool_name, tool_use_id=tool_use_id, 
+            case ToolUseEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
                               tool_input=tool_input):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="ToolUse", color="yellow",
                         signature=f"{tool_name}/{tool_use_id}"
                     ),
-                    f"{tool_name}({json.dumps(tool_input, indent=2, ensure_ascii=False)})"
+                    body=f"{tool_name}({json.dumps(tool_input, indent=2, ensure_ascii=False)})"
                 )
 
-            case ToolResultEvent(source_role=source_role, source_name=source_name, 
-                                 tool_name=tool_name, tool_use_id=tool_use_id, 
+            case ToolResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
                                  tool_output=tool_output):
                 if tool_name == "bash":
                     body = Syntax(truncate(tool_output, 100), "bash", theme="monokai", line_numbers=False)
@@ -140,63 +144,81 @@ class TUI:
                     body = f"{tool_name} -> {tool_output}"
 
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="TolResult", color="blue",
                         signature=f"{tool_name}/{tool_use_id}"
                     ),
-                    body
+                    body=body
                 )
 
-            case SystemWarnEvent(source_role=source_role, source_name=source_name, 
-                                 content=content):
+            case SystemWarnEvent(content=content):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="SystemWarn", color="orange3",
                     ),
-                    str(content)
+                    body=str(content)
                 )
 
-            case UnknownEvent(source_role=source_role, source_name=source_name, data=data):
+            case UnknownEvent(data=data):
                 self._print(
-                    self._format_title(
-                        round, source_role, source_name, 
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
                         action="SystemWarn", color="red",
                     ),
-                    str(data)
+                    body=str(data)
                 )
 
             case _:
                 self._print(
-                    self._format_title(
-                        round, Role.UNKNOWN, "unknwon",
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name,
                         color="red",
                     ),
-                    str(event)
+                    body=str(event)
                 )
 
+    @overload
+    def _format_header(self, *, event: Optional[Event]) -> Text: ...
+
+    @overload
+    def _format_header(self, *, paths: list[str] = [], color: str = "") -> Text: ...
+
+    def _format_header(self, *, event: Optional[Event] = None, paths: list[str] = [], color: str = "") -> Text:
+        if event:
+            final_paths = [p.capitalize() for p in event.paths if p]
+            final_color = color or event.extra.get("theme_color", "")
+        else:
+            final_paths = paths
+            final_color = color
+        return Text(" > ".join(final_paths), style=f"reverse {final_color}")
+
     def _format_title(self, 
-                      round: int, 
                       source_role: Role, source_name: str, 
                       action: str = "",
                       color: str = "", 
                       signature="") -> Text:
         return Text.assemble(
-            (f"[{round}]", f"{color}"), 
-            (f" {source_role.name}/{source_name}", f"bold {color}"), 
+            (f"{source_role.name}/{source_name}", f"bold {color}"), 
             (f" {action}" if action else "", f"{color}"),
             (f" ({signature})" if signature else "", f"italic {color}")
         )
 
-    def _print(self, title: Any, body: Any) -> None:
+    def _print(self, header: Any, title: Any, body: Any) -> None:
+        self._console.print(header)
         self._console.print(title)
-        self._console.print(Padding(body, (0, 0, 0, 6)))
+        self._console.print(Padding(body, (0, 0, 0, 4)))
 
 
 if __name__ == "__main__":
     TUI().run(
         Session(
+            name="tui",
             agent=Agent(
                 name="main", 
                 model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
@@ -204,6 +226,7 @@ if __name__ == "__main__":
                 system_prompt=SYSTEM_PROMPT
             ),
             tool_providers=[SessionBuildinToolProvider([run_bash, read_file, write_file, edit_file])],
-            middlewares=[TaskTracker()],
+            middleware_factories=[TaskTrackerFactory(3)],
+            theme_color="dodger_blue2"
         ),
     )

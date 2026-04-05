@@ -6,6 +6,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
+from os import path
 from typing import Any, Iterable
 from anthropic.types import ContentBlock
 from typing_extensions import override
@@ -20,6 +21,8 @@ class Role(Enum):
 @dataclass(frozen=True)
 class Event(ABC):
     source_name: str
+    paths: list[str]
+    extra: dict = field(default_factory=dict)
     timestamp: datetime = field(default_factory=datetime.now)
 
     def __post_init__(self):
@@ -30,6 +33,9 @@ class Event(ABC):
     @abstractmethod
     def source_role(self) -> Role:
         raise NotImplementedError("Subclasses must implement the role property.")
+
+    def update_extra(self, **kwargs):
+        self.extra.update(kwargs)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -119,28 +125,50 @@ class UserPromptEvent(UserEvent):
 class EventFactory:
 
     @classmethod
-    def generate(cls, agent_name: str, *blocks: ContentBlock) -> Iterable[Event]:
+    def generate(cls, paths:list[str], agent_name: str, blocks: list[ContentBlock], extra={}) -> Iterable[Event]:
         for block in blocks:
-            yield cls.create(agent_name, block)
+            yield cls.create(paths, agent_name, block, extra=extra)
 
     @classmethod
-    def create(cls, agent_name: str, block: ContentBlock) -> Event:
+    def create(cls, paths:list[str], agent_name: str, block: ContentBlock, extra={}) -> Event:
         if block.type == "thinking":
-            return ThinkingEvent(source_name=agent_name, thinking=block.thinking)
+            return ThinkingEvent(
+                paths=paths,
+                source_name=agent_name, 
+                thinking=block.thinking,
+                extra=extra,
+            )
+
         elif block.type == "tool_use":
             return ToolUseEvent(
+                paths=paths,
                 source_name=agent_name,
                 tool_name=block.name, 
                 tool_use_id=block.id, 
-                tool_input=block.input
+                tool_input=block.input,
+                extra=extra,
             )
+
         elif block.type == "tool_result":
             return ToolResultEvent(
+                paths=paths,
                 tool_name=block.data["name"], 
                 tool_use_id=block.data["id"], 
-                tool_output=block.data["output"]
+                tool_output=block.data["output"],
+                extra=extra,
             )
+
         elif block.type == "text":
-            return AssitantOutputEvent(source_name=agent_name, content=block.text)
+            return AssitantOutputEvent(
+                paths=paths,
+                source_name=agent_name, 
+                content=block.text,
+                extra=extra,
+            )
+
         else:
-            return UnknownEvent(data=block)
+            return UnknownEvent(
+                paths=paths, 
+                data=block,
+                extra=extra,
+            )

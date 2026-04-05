@@ -58,6 +58,17 @@ class AgentRunContext(AgentRunHooks, ABC):
         """
         pass
 
+    @abstractmethod
+    def extend_paths(self, *parts: str) -> list[str]:
+        """extend paths to the paths in context and return full path
+        """
+        pass
+
+    def get_evnet_extra(self) -> dict[str, Any]:
+        """get extra info as map for event
+        """
+        return {}
+
 
 class Agent:
     """
@@ -97,19 +108,26 @@ class Agent:
             yield from self._loop(ctx, tool_descs)
         except Exception as e:
             yield AssistantErrorEvent(
+                paths=self._build_paths(ctx, "loop", "error"),
                 source_name=self._name, 
-                error=f"Error during agent loop: {e}:\n{traceback.format_exc()}"
+                error=f"Error during agent loop: {e}:\n{traceback.format_exc()}",
+                extra=self._build_event_extra(ctx),
             )
 
     def _loop(self, ctx: AgentRunContext, tool_descs: list[dict]):
+        step_counter = 0
         while True:
+            step_counter += 1
+
             # Agent takes a step
             try:
                 response = self._chat(ctx.get_inputs(), tool_descs)
             except Exception as e:
                 yield AssistantErrorEvent(
+                    paths=self._build_paths(ctx, f"step:{step_counter}"),
                     source_name=self._name,
-                    error=f"Error during agent step: {e}:\n{traceback.format_exc()}"
+                    error=f"Error during agent step: {e}:\n{traceback.format_exc()}",
+                    extra=self._build_event_extra(ctx),
                 )
                 return
 
@@ -128,7 +146,12 @@ class Agent:
                 results = []
 
                 for block in response.content:
-                    yield EventFactory.create(self._name, block)
+                    yield EventFactory.create(
+                        self._build_paths(ctx, f"step:{step_counter}"),
+                        self._name, 
+                        block,
+                        extra=self._build_event_extra(ctx),
+                    )
 
                     # yield extra tool result for tool_use block
                     if block.type == "tool_use":
@@ -137,7 +160,13 @@ class Agent:
                         # Tool call
                         output = self._use_tool(ctx, tool_name, **block.input) 
                         # print(truncate(output))
-                        yield ToolResultEvent(tool_name=tool_name, tool_use_id=block.id, tool_output=output)
+                        yield ToolResultEvent(
+                            paths=self._build_paths(ctx, f"step:{step_counter}"),
+                            tool_name=tool_name, 
+                            tool_use_id=block.id, 
+                            tool_output=output,
+                            extra=self._build_event_extra(ctx),
+                        )
 
                         results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
 
@@ -147,7 +176,12 @@ class Agent:
                 # Final Message
                 # If the model didn't call a tool, we're done
                 loop_completed = True
-                yield from EventFactory.generate(self._name, *response.content)
+                yield from EventFactory.generate(
+                    self._build_paths(ctx, f"step:{step_counter}"),
+                    self._name, 
+                    response.content,
+                    extra=self._build_event_extra(ctx),
+                )
 
             # If the completed is None, it will be ignored.
             # If anyone need the loop to continue, it must respoend an explicit False.
@@ -183,6 +217,12 @@ class Agent:
             tool_to_use=tool_name, 
             **tool_input
         )
+
+    def _build_paths(self, ctx: AgentRunContext, *parts):
+        return ctx.extend_paths(f"agent:{self._name}", "loop", *parts)
+
+    def _build_event_extra(self, ctx: AgentRunContext):
+        return ctx.get_evnet_extra()
 
     def close(self):
         pass
