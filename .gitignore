@@ -228,3 +228,6 @@ analysis_progress.md
 
 # python
 .python-version
+
+.vscode
+web/src/data/generated
