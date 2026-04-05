@@ -271,7 +271,7 @@ class TaskTracker(SessionMiddleware):
                    f"The progress is {self._task_manager.current_task_progress}. " 
                    f"Please update the task status or explain why you cannot.")
 
-        yield SystemWarnEvent("TaskTracker", content=content)
+        yield SystemWarnEvent(source_name="TaskTracker", content=content)
         session.append_message(role="user", content=content)
 
         self._reset_idle_steps()

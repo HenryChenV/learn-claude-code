@@ -102,7 +102,10 @@ class Agent:
             tool_descs = self._resolve_tools(ctx)
             yield from self._loop(ctx, tool_descs)
         except Exception as e:
-            yield AssistantErrorEvent(error=f"Error during agent loop: {e}:\n{traceback.format_exc()}")
+            yield AssistantErrorEvent(
+                source_name=self._name, 
+                error=f"Error during agent loop: {e}:\n{traceback.format_exc()}"
+            )
 
     def _loop(self, ctx: AgentRunContext, tool_descs: list[dict]):
         while True:
@@ -110,7 +113,10 @@ class Agent:
             try:
                 response = self._chat(ctx.get_inputs(), tool_descs)
             except Exception as e:
-                yield AssistantErrorEvent(error=f"Error during agent step: {e}:\n{traceback.format_exc()}")
+                yield AssistantErrorEvent(
+                    source_name=self._name,
+                    error=f"Error during agent step: {e}:\n{traceback.format_exc()}"
+                )
                 return
 
             # Append assistant turn
@@ -128,7 +134,7 @@ class Agent:
                 results = []
 
                 for block in response.content:
-                    yield EventFactory.create(block)
+                    yield EventFactory.create(self._name, block)
 
                     # yield extra tool result for tool_use block
                     if block.type == "tool_use":
@@ -147,7 +153,7 @@ class Agent:
                 # Final Message
                 # If the model didn't call a tool, we're done
                 loop_completed = True
-                yield from EventFactory.generate(*response.content)
+                yield from EventFactory.generate(self._name, *response.content)
 
             # If the completed is None, it will be ignored.
             # If anyone need the loop to continue, it must respoend an explicit False.
