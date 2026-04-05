@@ -50,8 +50,6 @@ class AssistantEvent(Event, ABC):
 @dataclass(frozen=True, kw_only=True)
 class UserEvent(Event, ABC):
 
-    source_name: str = "You"
-
     @property
     @override
     def source_role(self) -> Role:

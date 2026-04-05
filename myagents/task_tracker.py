@@ -130,11 +130,11 @@ class TaskManager:
             raise RuntimeError(f"Current Task is not Done. Progress: {self._current_task.progress}")
         task = Task(task_name, steps)
         print(f"Task: {task.detail}\n")
-        comment = input("type 'yes' to approve the task," 
+        comment = input("type 'yes/y/ok/approved' to approve the task," 
                         " or the operation will be interrupted with message you typed.\n "
                         "Comment: ")
 
-        if comment != "yes":
+        if comment not in ("yes", "y", "ok", "approved"):
             raise CreateTaskFailure(f"User disapproved: {comment}")
 
         self._current_task = task

@@ -92,7 +92,17 @@ class TUI:
     def print(self, event: Event) -> str | None:
         match event:
             case UserPromptEvent(prompt=prompt):
-                return None
+                if event.source_name.lower() == "you":
+                    # The prompt is just typed by user and is diaplayed in tui.
+                    return None
+                self._print(
+                    header=self._format_header(event=event),
+                    title=self._format_title(
+                        event.source_role, event.source_name, 
+                        action="UserPrompt", color="cyan"
+                    ),
+                    body=prompt,
+                )
 
             case ThinkingEvent(thinking=thinking):
                 self._print(

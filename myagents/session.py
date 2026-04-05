@@ -135,18 +135,21 @@ class Session:
     _middlewares: list['SessionMiddleware']
     _round_counter: int
     _theme_color: str
+    _user: str
 
     def __init__(self, 
                  name: str,
                  agent: Agent, 
                  tool_providers: list[ToolProvider],
                  middleware_factories: list['SessionMiddlewareFactory'] = [],
+                 user="You",
                  theme_color="") -> None:
 
         self._sid = SessionID(name)
         self._history = History()
         self._round_counter = 0
         self._theme_color = theme_color
+        self._user = user
 
         self._agent = agent
 
@@ -186,6 +189,7 @@ class Session:
         # Append user turn
         self._history.append("user", prompt)
         yield UserPromptEvent(
+            source_name=self._user,
             paths=self.extend_paths(), 
             prompt=prompt, 
             extra=self.event_extra
