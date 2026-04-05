@@ -10,6 +10,8 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
 
+from .models import ModelManager
+
 from .events import (
     Role, 
     Event,
@@ -197,8 +199,7 @@ if __name__ == "__main__":
         Session(
             agent=Agent(
                 name="main", 
-                base_url=BASE_URL, 
-                model_id=MODEL,
+                model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
                 allowed_capabilities=["bash", "file.*", "task.*"],
                 system_prompt=SYSTEM_PROMPT
             ),

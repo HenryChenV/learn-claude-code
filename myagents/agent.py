@@ -6,17 +6,14 @@ Agent class for the myagents package.
 import traceback
 from typing import Generator, Iterable, Literal, Optional, Sequence, Union
 
-from anthropic import Anthropic, Omit, omit
+from anthropic import Omit, omit
 from anthropic.types import Message, TextBlockParam
 
 from .tools.core.capability import CapabilityRule
 
-from .tools.core.manager import ToolManager
-
 from .tools.core import Tool
 from .events import *
-from .history import History
-
+from .models import Model
 
 
 class AgentRunHooks:
@@ -76,23 +73,20 @@ class Agent:
     """
 
     _name: str
-    _client: Anthropic
-    _model_id: str | None
     _system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit
+    _model: Model
     _allowed_capabilities: list[CapabilityRule]
     _max_tokens: int
 
     def __init__(
             self, 
             name: str, 
-            base_url: str | None, 
-            model_id: str | None, 
+            model: Model,
             allowed_capabilities: list[str] = [],
             system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit,
             max_tokens: int = 8000) -> None:
         self._name = name
-        self._client = Anthropic(base_url=base_url)
-        self._model_id = model_id
+        self._model = model
         self._system_prompt = system_prompt
         self._allowed_capabilities = [CapabilityRule.wrap(c) for c in allowed_capabilities]
         self._max_tokens = max_tokens
@@ -165,12 +159,11 @@ class Agent:
                 return
 
     def _chat(self, inputs: Iterable[dict], tool_descs: list[dict]) -> Message:
-        return self._client.messages.create(
-            model=self._model_id, # type: ignore
-            system=self._system_prompt,
-            messages=inputs, # type: ignore
-            tools=tool_descs, # type: ignore
+        return self._model.chat(
             max_tokens=self._max_tokens,
+            messages=inputs, # type: ignore
+            system_prompt=self._system_prompt,
+            tools=tool_descs, # type: ignore
         )
 
     def _resolve_tools(self, ctx: AgentRunContext) -> list[dict]:
@@ -192,4 +185,4 @@ class Agent:
         )
 
     def close(self):
-        self._client.close()
+        pass
