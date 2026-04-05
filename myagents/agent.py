@@ -4,7 +4,7 @@ Agent class for the myagents package.
 
 
 import traceback
-from typing import Iterable, Literal, Sequence, Union
+from typing import Generator, Iterable, Literal, Optional, Sequence, Union
 
 from anthropic import Anthropic, Omit, omit
 from anthropic.types import Message, TextBlockParam
@@ -19,19 +19,23 @@ from .history import History
 
 
 
-class AgentHooks:
+class AgentRunHooks:
 
-    def post_step(self, resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
+    def post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
         """hook before loop end
 
         If some messages are appended, you may want the loop continues.
 
         Returns:
-            bool: completed or not
+            bool: 
+                True: completed
+                False: continue
+                None: determined by caller
         """
-        return [], True
+        yield from []
+        return None
 
-class AgentRunContext(AgentHooks, ABC):
+class AgentRunContext(AgentRunHooks, ABC):
 
     @abstractmethod
     def get_inputs(self) -> Sequence[dict]:
@@ -145,11 +149,11 @@ class Agent:
                 loop_completed = True
                 yield from EventFactory.generate(*response.content)
 
-            events, loop_completed = ctx.post_step(response, loop_completed)
-
-            if events:
-                for event in events:
-                    yield event
+            # If the completed is None, it will be ignored.
+            # If anyone need the loop to continue, it must respoend an explicit False.
+            completed = yield from ctx.post_step(response)
+            if completed is False:
+                loop_completed = False
             
             if loop_completed:
                 return

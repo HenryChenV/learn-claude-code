@@ -3,9 +3,8 @@ Session management for myagents.
 """
 
 
-from json import tool
 from mailbox import Message
-from typing import Literal, Protocol, Sequence
+from typing import Generator, Literal, Optional, Protocol, Sequence
 
 from anthropic.types import Message
 from typing_extensions import override
@@ -64,8 +63,8 @@ class _AgentRunContext(AgentRunContext):
         return self._session._tool_manager.execute(allowed_capabilities, tool_to_use, **tool_kwargs)
 
     @override
-    def post_step(self, resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
-        return self._session._post_step(resp, loop_completed)
+    def post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
+        return (yield from self._session._post_step(resp))
 
 
 class Session:
@@ -91,16 +90,14 @@ class Session:
         for middleware in self._middlewares:
             middleware.post_session_init(self)
 
-    def _post_step(self, resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
-        all_events = []
+    def _post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
+        loop_completed = None
         for middleware in self._middlewares:
-            events, completed = middleware.post_agent_step(self, resp, loop_completed)
-            if events:
-                all_events.extend(events)
-            if not completed:
-                # the loop will continue if any middleware want it to be
+            completed = yield from middleware.post_agent_step(self, resp)
+            if completed is False:
+                # the loop will continue if any middleware want it to continue
                 loop_completed = False
-        return all_events, loop_completed
+        return loop_completed
 
     def add_tool_provider(self, provider: ToolProvider):
         self._tool_manager.add_provider(provider)
@@ -125,6 +122,7 @@ class SessionMiddleware(Protocol):
 
     def post_session_init(self, session: 'Session') -> None: ...
 
-    def post_agent_step(self, session: 'Session', resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
-        return [], loop_completed
+    def post_agent_step(self, session: 'Session', resp: Message) -> Generator[Event, None, Optional[bool]]:
+        yield from []
+        return None
 

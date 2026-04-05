@@ -6,6 +6,7 @@
 
 from enum import Enum
 from mailbox import Message
+from typing import Generator, Optional
 from typing_extensions import override
 
 from anthropic.types import Message
@@ -237,10 +238,11 @@ class TaskTracker(SessionMiddleware):
         session.add_tool_provider(self._task_manager)
 
     @override
-    def post_agent_step(self, session: Session, resp: Message, loop_completed: bool) -> tuple[list[Event], bool]:
+    def post_agent_step(self, session: Session, resp: Message) -> Generator[Event, None, Optional[bool]]:
         if not self._task_manager.has_uncompleted_task() or not self._task_manager.tool_names:
             # no uncompleted task, nothing to trace
-            return [], loop_completed
+            yield from []
+            return None
 
         idle = True
         if resp.stop_reason == "tool_use":
@@ -255,23 +257,26 @@ class TaskTracker(SessionMiddleware):
 
         if not idle:
             self._reset_idle_steps()
-            return [], loop_completed
+            yield from []
+            return None
 
         self._idle_steps += 1
-        if self._idle_steps >= self._max_idle_steps:
-            content = (f"TaskTracker(I'm not user, just a task tracker): "
-                       f"You have uncompleted task "
-                       f"and don't update the status for at least {self._max_idle_steps} rounds." 
-                       f"The progress is {self._task_manager.current_task_progress}. " 
-                       f"Please update the task status or explain why you cannot.")
+        if self._idle_steps < self._max_idle_steps:
+            yield from []
+            return None
 
-            session.append_message(role="user", content=content)
+        content = (f"TaskTracker(I'm not user, just a task tracker): "
+                   f"You have uncompleted task "
+                   f"and don't update the status for at least {self._max_idle_steps} rounds." 
+                   f"The progress is {self._task_manager.current_task_progress}. " 
+                   f"Please update the task status or explain why you cannot.")
 
-            self._reset_idle_steps()
+        yield SystemWarnEvent("TaskTracker", content=content)
+        session.append_message(role="user", content=content)
 
-            return [SystemWarnEvent("TaskTracker", content=content)], False
+        self._reset_idle_steps()
 
-        return [], loop_completed
+        return False
 
     def _reset_idle_steps(self):
         self._idle_steps = 0
