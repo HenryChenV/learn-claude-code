@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import json
-from os import path
 from typing import Any, Iterable, Optional, Protocol, overload
 from anthropic.types import ContentBlock
 from rich.console import Console
@@ -277,7 +276,7 @@ class ConsoleEventRenderer:
                     header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
-                        action="TolResult", color="blue",
+                        action="ToolResult", color="blue",
                         signature=f"{tool_name}/{tool_use_id}"
                     ),
                     body=body

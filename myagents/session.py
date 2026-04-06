@@ -4,12 +4,13 @@ Session management for myagents.
 
 
 from mailbox import Message
-from typing import Generator, Literal, Optional, Protocol, Sequence
+from typing import Generator, Literal, Optional, Protocol, Self, Sequence, Any
 
 from anthropic.types import Message
 from typing_extensions import override
 
-from myagents.events import Any
+from .ids import HierarchicalID
+from .tools.core.tool import FunctionTool
 
 from .tools.core.capability import CapabilityRule
 
@@ -17,7 +18,6 @@ from .tools.core.capability import CapabilityRule
 from .agent import Agent, AgentRunContext
 from .tools.core import Tool, ToolManager
 from .tools.core.provider import ToolProvider
-from .utils import truncate
 from .events import *
 from .history import History
 
@@ -44,7 +44,7 @@ class _AgentRunContext(AgentRunContext):
     def get_inputs(self) -> Sequence[dict]:
         """get inputs
         """
-        return self._session._history.messages
+        return self._session.history
 
     @override
     def append_message(self, role: Literal["user", "assistant"], content) -> None:
@@ -73,56 +73,20 @@ class _AgentRunContext(AgentRunContext):
         return self._session.extend_paths(*parts)
 
     @override
+    def get_final_message(self) -> str:
+        final_message = self._session.latest_message
+        if final_message:
+            return str(final_message)
+        return "(no message yet)"
+
+    @override
     def get_evnet_extra(self) -> dict[str, Any]:
         return self._session.event_extra
 
 
-class SessionID:
+class SessionID(HierarchicalID):
 
-    _name: str
-    _parent: Optional['SessionID']
-    _created_at: datetime
-    _sub_counter: int
-
-    def __init__(self, name, parent: Optional['SessionID'] = None):
-        self._name = name
-        self._parent = parent
-        self._created_at = datetime.now()
-        self._sub_counter = 0
-        self._id = self._gen_id()
-
-    def _gen_id(self) -> str:
-        paths = [self._name]
-        parent = self._parent
-        while parent:
-            paths.append(parent.id)
-            parent = parent._parent
-        return ":".join(reversed(paths))
-
-    def spawn(self) -> 'SessionID':
-        self._sub_counter += 1
-        return SessionID(f"sub{self._sub_counter}", self)
-
-    @property
-    def id(self):
-        return self._id
-
-    @property
-    def parent(self):
-        return self._parent
-
-    @property
-    def created_at(self):
-        return self._created_at
-
-    @property
-    def is_root(self) -> bool:
-        return self._parent is None
-
-    def __str__(self) -> str:
-        return f"{self.__class__.__name__}({self.id}/{self.created_at})"
-
-    __repr__ = __str__
+    pass
 
 
 class Session:
@@ -130,6 +94,7 @@ class Session:
     _sid: SessionID
     _history: History
     _agent: Agent
+    _tool_providers: list[ToolProvider]
     _tool_manager: ToolManager
     _middleware_factories: list['SessionMiddlewareFactory']
     _middlewares: list['SessionMiddleware']
@@ -138,25 +103,26 @@ class Session:
     _user: str
 
     def __init__(self, 
-                 name: str,
+                 sid: str | SessionID,
                  agent: Agent, 
                  tool_providers: list[ToolProvider],
                  middleware_factories: list['SessionMiddlewareFactory'] = [],
                  user="You",
                  theme_color="") -> None:
 
-        self._sid = SessionID(name)
-        self._history = History()
-        self._round_counter = 0
-        self._theme_color = theme_color
-        self._user = user
-
+        self._sid = SessionID.wrap(sid)
         self._agent = agent
+        self._tool_providers = tool_providers
+        self._middleware_factories = middleware_factories
+        self._user = user
+        self._theme_color = theme_color
 
-        self._tool_manager = ToolManager(initial_providers=tool_providers)
+        self._round_counter = 0
+        self._history = History()
+
+        self._tool_manager = ToolManager(initial_providers=tool_providers + [self])
 
         # create middlewares
-        self._middleware_factories = middleware_factories
         self._middlewares = []
         for factory in middleware_factories:
             obj = factory.create(self)
@@ -168,6 +134,59 @@ class Session:
     def _post_init(self):
         for middleware in self._middlewares:
             middleware.post_session_init(self)
+
+    def spawn(self, allow_sub_spawn: bool = False) -> Self:
+        return self.__class__(
+            sid=self._sid.spawn(),
+            agent=self._agent.spawn(),
+            tool_providers=self._tool_providers,
+            middleware_factories=self._middleware_factories,
+            user=self._sid.name
+        )
+
+    def stream(self, prompt: str) -> Generator[Event, None, str]:
+        self._round_counter += 1
+
+        # Append user turn
+        self.append_message("user", prompt)
+        yield UserPromptEvent(
+            source_name=self._user,
+            paths=self.extend_paths(), 
+            prompt=prompt, 
+            extra=self.event_extra
+        )
+
+        # Run the agent loop until it stops
+        return (yield from self._agent.run(_AgentRunContext(self)))
+
+    def get_tools(self) -> list[Tool]:
+
+        @FunctionTool.wrapper(required_capabilities="subagent.spawn")
+        def spawn_subagent(prompt: str):
+            """Spawn a subagent to run task.
+            
+            Subagent will only return the final result instead of details 
+            which will can make the context of main agent clean.
+            If you need to run a task with many details, 
+            using this tool to delegate to a subagent is a better way.
+
+            Args:
+                prompt (int): tell subagent what to do including background and details necessary
+
+            Returns:
+                str: final result
+            """
+            console = ConsoleEventRenderer()
+            gen = self.spawn().stream(prompt)
+
+            while True:
+                try:
+                    console.print(next(gen))
+                except StopIteration as e:
+                    return e.value
+
+        return [spawn_subagent]
+            
 
     def _post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
         loop_completed = None
@@ -184,26 +203,29 @@ class Session:
     def append_message(self, role: Literal["user", "assistant"], content):
         self._history.append(role, content)
 
-    def stream(self, prompt: str):
-        self._round_counter += 1
-        # Append user turn
-        self._history.append("user", prompt)
-        yield UserPromptEvent(
-            source_name=self._user,
-            paths=self.extend_paths(), 
-            prompt=prompt, 
-            extra=self.event_extra
-        )
-
-        # Run the agent loop until it stops
-        yield from self._agent.run(_AgentRunContext(self))
-
     def extend_paths(self, *parts: str) -> list[str]:
         return [f"session:{self.sid.id}", f"round:{self.rounds}"] + list(parts)
 
     @property
     def rounds(self) -> int:
         return self._round_counter
+
+    @property
+    def history(self) -> Sequence[dict]:
+        return self._history.messages
+
+    @property
+    def latest_message(self) -> Optional[dict]:
+        """
+        get latest message
+
+        Returns:
+            Optional[dict]: 
+                None if no message or the latest one
+        """
+        if self._history.messages:
+            return self._history.messages[-1]
+        return None
 
     @property
     def sid(self) -> SessionID:

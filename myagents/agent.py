@@ -4,10 +4,12 @@ Agent class for the myagents package.
 
 
 import traceback
-from typing import Generator, Iterable, Literal, Optional, Sequence, Union
+from typing import Generator, Iterable, Literal, Optional, Self, Sequence, Union
 
 from anthropic import Omit, omit
 from anthropic.types import Message, TextBlockParam
+
+from .ids import HierarchicalID
 
 from .tools.core.capability import CapabilityRule
 
@@ -64,10 +66,20 @@ class AgentRunContext(AgentRunHooks, ABC):
         """
         pass
 
+    @abstractmethod
+    def get_final_message(self) -> str:
+        """get final message
+        """
+        pass
+
     def get_evnet_extra(self) -> dict[str, Any]:
         """get extra info as map for event
         """
         return {}
+
+
+class AgentID(HierarchicalID):
+    pass
 
 
 class Agent:
@@ -83,7 +95,7 @@ class Agent:
         _allowed_capabilities (list[str]): capabilities
     """
 
-    _name: str
+    _aid: AgentID
     _system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit
     _model: Model
     _allowed_capabilities: list[CapabilityRule]
@@ -91,30 +103,48 @@ class Agent:
 
     def __init__(
             self, 
-            name: str, 
+            aid: Union[str, AgentID], 
             model: Model,
             allowed_capabilities: list[str] = [],
             system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit,
             max_tokens: int = 8000) -> None:
-        self._name = name
+        self._aid = AgentID.wrap(aid)
         self._model = model
         self._system_prompt = system_prompt
         self._allowed_capabilities = [CapabilityRule.wrap(c) for c in allowed_capabilities]
         self._max_tokens = max_tokens
 
-    def run(self, ctx: AgentRunContext):
+    def spawn(self, allow_sub_spawn: bool = False) -> Self:
+        if allow_sub_spawn:
+            capabilities = [c.raw for c in self._allowed_capabilities]
+        else:
+            capabilities = [c.raw for c in self._allowed_capabilities] + ["!subagent.spawn"]
+        return self.__class__(
+            self._aid.spawn(),
+            model=self._model,
+            allowed_capabilities=capabilities,
+            max_tokens=self._max_tokens
+        )
+
+    @property
+    def name(self):
+        return self._aid.name
+
+    def run(self, ctx: AgentRunContext) -> Generator[Event, None, str]:
         try:
             tool_descs = self._resolve_tools(ctx)
-            yield from self._loop(ctx, tool_descs)
+            return (yield from self._loop(ctx, tool_descs))
         except Exception as e:
+            error=f"Error during agent loop: {e}"
             yield AssistantErrorEvent(
                 paths=self._build_paths(ctx, "loop", "error"),
-                source_name=self._name, 
-                error=f"Error during agent loop: {e}:\n{traceback.format_exc()}",
+                source_name=self.name, 
+                error=f"{error}:\n{traceback.format_exc()}",
                 extra=self._build_event_extra(ctx),
             )
+            return error
 
-    def _loop(self, ctx: AgentRunContext, tool_descs: list[dict]):
+    def _loop(self, ctx: AgentRunContext, tool_descs: list[dict]) -> Generator[Event, None, str]:
         step_counter = 0
         while True:
             step_counter += 1
@@ -123,13 +153,14 @@ class Agent:
             try:
                 response = self._chat(ctx.get_inputs(), tool_descs)
             except Exception as e:
+                error=f"Error during agent step: {e}"
                 yield AssistantErrorEvent(
                     paths=self._build_paths(ctx, f"step:{step_counter}"),
-                    source_name=self._name,
-                    error=f"Error during agent step: {e}:\n{traceback.format_exc()}",
+                    source_name=self.name,
+                    error=f"{error}: \n{traceback.format_exc()}",
                     extra=self._build_event_extra(ctx),
                 )
-                return
+                return error
 
             # Append assistant turn
             ctx.append_message("assistant", response.content)
@@ -148,7 +179,7 @@ class Agent:
                 for block in response.content:
                     yield EventFactory.create(
                         self._build_paths(ctx, f"step:{step_counter}"),
-                        self._name, 
+                        self.name, 
                         block,
                         extra=self._build_event_extra(ctx),
                     )
@@ -178,7 +209,7 @@ class Agent:
                 loop_completed = True
                 yield from EventFactory.generate(
                     self._build_paths(ctx, f"step:{step_counter}"),
-                    self._name, 
+                    self.name, 
                     response.content,
                     extra=self._build_event_extra(ctx),
                 )
@@ -190,7 +221,7 @@ class Agent:
                 loop_completed = False
             
             if loop_completed:
-                return
+                return ctx.get_final_message()
 
     def _chat(self, inputs: Iterable[dict], tool_descs: list[dict]) -> Message:
         return self._model.chat(
@@ -219,7 +250,7 @@ class Agent:
         )
 
     def _build_paths(self, ctx: AgentRunContext, *parts):
-        return ctx.extend_paths(f"agent:{self._name}", "loop", *parts)
+        return ctx.extend_paths(f"agent:{self.name}", "loop", *parts)
 
     def _build_event_extra(self, ctx: AgentRunContext):
         return ctx.get_evnet_extra()

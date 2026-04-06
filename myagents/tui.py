@@ -82,11 +82,11 @@ class TUI:
 if __name__ == "__main__":
     TUI().run(
         Session(
-            name="tui",
+            sid="tui",
             agent=Agent(
-                name="main", 
+                aid="main", 
                 model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
-                allowed_capabilities=["bash", "file.*", "task.*"],
+                allowed_capabilities=["bash", "file.*", "task.*", "subagent.spawn"],
                 system_prompt=SYSTEM_PROMPT
             ),
             tool_providers=[SessionBuildinToolProvider([run_bash, read_file, write_file, edit_file])],
