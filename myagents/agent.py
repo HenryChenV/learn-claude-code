@@ -143,7 +143,7 @@ class Agent:
     """
 
     _aid: AgentID
-    _agent_sys_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit
+    _agent_sys_prompt: Iterable[TextBlockParam]
     _model: Model
     _allowed_capabilities: list[CapabilityRule]
     _max_tokens: int
@@ -179,14 +179,9 @@ class Agent:
 
     def run(self, ctx: AgentRunContext) -> Generator[Event, None, str]:
         tool_metas = self._resolve_tools(ctx)
-        skill_prompt = self._resolve_skills_as_prompt(ctx)
-
-        extra_sys_prompts = []
-        if skill_prompt:
-            extra_sys_prompts.append(skill_prompt)
-
+        system_prompt = self._build_system_prompt(ctx)
         try:
-            return (yield from self._loop(ctx, tool_metas, extra_sys_prompts))
+            return (yield from self._loop(ctx, tool_metas, system_prompt))
 
         except Exception as e:
             error=f"Error during agent loop: {e}"
@@ -201,7 +196,7 @@ class Agent:
     def _loop(self, 
               ctx: AgentRunContext, 
               tool_metas: list[ToolUnionParam],
-              extra_sys_prompts: Iterable[TextBlockParam],
+              system_prompt: Iterable[TextBlockParam],
         ) -> Generator[Event, None, str]:
         step_counter = 0
         while True:
@@ -210,9 +205,9 @@ class Agent:
             # Agent takes a step
             try:
                 response = self._chat(
-                    ctx.get_inputs(), 
-                    tool_metas,
-                    extra_sys_prompts=extra_sys_prompts
+                    messages=ctx.get_inputs(), 
+                    tools=tool_metas,
+                    system_prompt=system_prompt,
                 )
             except Exception as e:
                 error=f"Error during agent step: {e}"
@@ -259,6 +254,13 @@ class Agent:
                         #   The allowed capabilities should be given.
                         if ctx.is_skill_use(tool_name):
                             output = self._use_skill(ctx, tool_kwargs)
+                            yield SkillResultEvent(
+                                paths=self._build_paths(ctx, f"step:{step_counter}"),
+                                tool_name=tool_name, 
+                                tool_use_id=block.id, 
+                                output=output,
+                                extra=self._build_event_extra(ctx),
+                            )
                         else:
                             output = self._use_tool(ctx, tool_name, tool_kwargs) 
                             # print(truncate(output))
@@ -266,7 +268,7 @@ class Agent:
                                 paths=self._build_paths(ctx, f"step:{step_counter}"),
                                 tool_name=tool_name, 
                                 tool_use_id=block.id, 
-                                tool_output=output,
+                                output=output,
                                 extra=self._build_event_extra(ctx),
                             )
 
@@ -295,14 +297,14 @@ class Agent:
                 return ctx.get_final_message()
 
     def _chat(self, 
-              inputs: Iterable[MessageParam], 
-              tool_descs: Iterable[ToolUnionParam],
-              extra_sys_prompts: Iterable[TextBlockParam] = []) -> Message:
+              messages: Iterable[MessageParam], 
+              tools: Iterable[ToolUnionParam],
+              system_prompt: Iterable[TextBlockParam] = []) -> Message:
         return self._model.chat(
             max_tokens=self._max_tokens,
-            messages=inputs,
-            system_prompt=self._agent_sys_prompt,
-            tools=tool_descs,
+            messages=messages,
+            system_prompt=system_prompt,
+            tools=tools,
         )
 
     def _resolve_tools(self, ctx: AgentRunContext) -> list[ToolUnionParam]:
@@ -312,14 +314,22 @@ class Agent:
         )
         return [self._build_tool_desc(t) for t in tools]
 
-    def _resolve_skills_as_prompt(self, ctx: AgentRunContext) -> TextBlockParam:
+    def _build_system_prompt(self, ctx: AgentRunContext) -> Iterable[TextBlockParam]:
+        skill_prompt = self._resolve_skills_as_prompt(ctx)
+
+        if skill_prompt:
+            return list(self._agent_sys_prompt) + [skill_prompt]
+        return self._agent_sys_prompt
+
+    def _resolve_skills_as_prompt(self, ctx: AgentRunContext) -> Optional[TextBlockParam]:
         skills = ctx.resolve_skills(self._allowed_capabilities)
 
         if not skills:
-            skill_prompt = "no skill available"
+            return None
         else:
             skill_prompt = (
-                "Available Skill:"
+                "If you plan to use the skill, please use use_skill tool to get more details. "
+                "The names and brief descriptions of available skill are below: "
                 "\n".join(f"  - {str(s)}" for s in skills)
             )
         return {"type": "text", "text": skill_prompt}

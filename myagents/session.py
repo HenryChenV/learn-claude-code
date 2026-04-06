@@ -61,6 +61,11 @@ class _AgentRunContext(AgentRunContext):
                   skill_kwargs: dict, 
                   extra_providers: Iterable[SkillProvider] = []) -> str:
         try:
+            return self._session.use_skill(
+                allowed_capabilities=allowed_capabilities,
+                skill_kwargs=skill_kwargs,
+                extra_providers=extra_providers 
+            )
         except Exception as e:
             return f"Error use skill '{skill_kwargs}': {e}"
 

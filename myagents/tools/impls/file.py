@@ -3,7 +3,7 @@ from pathlib import Path
 from myagents.capability import Capability
 
 from ..core import FunctionTool
-from common import WORKDIR
+from myagents.common import WORKDIR
 
 
 def safe_path(p: str) -> Path:

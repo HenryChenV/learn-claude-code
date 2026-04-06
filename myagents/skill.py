@@ -8,7 +8,7 @@ from typing import Iterable, Optional, Protocol
 
 import yaml
 
-from .capability import CapabilityEvaluator, CapabilityRule
+from .capability import Capability, CapabilityEvaluator, CapabilityRule
 
 from .log import get_logger
 
@@ -34,6 +34,9 @@ class SkillMeta:
 
         # make sure required_capabilities is not empty
         required_capabilities = self.required_capabilities or []
+        # SKILL_USE is required
+        if Capability.SKILL_USE.value not in required_capabilities:
+            required_capabilities.append(Capability.SKILL_USE.value)
         # make required_capablities immuatable
         object.__setattr__(
             self, 

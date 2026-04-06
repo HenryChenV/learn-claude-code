@@ -2,7 +2,9 @@ import os
 
 from dotenv import load_dotenv
 from rich.console import Console
+from prompt_toolkit import prompt
 
+from myagents.capability import Capability
 from myagents.common import WORKDIR
 from myagents.skill import StaticSkillsLoader
 from myagents.tools import BuildinToolProvider
@@ -73,19 +75,26 @@ class TUI:
         )
         self._console.print(header)
         self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
-        return input()
+        return prompt()
 
 
 if __name__ == "__main__":
+    mainagent = Agent(
+        aid="main", 
+        model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
+        allowed_capabilities=[
+            Capability.BASH.value,
+            Capability.FILE_READ.value,
+            "task.*", 
+            Capability.SUBAGENT_SPAWN.value,
+            Capability.SKILL_USE.value,
+        ],
+        sys_prompt=SYSTEM_PROMPT
+    )
     TUI().run(
         Session(
             sid="tui",
-            agent=Agent(
-                aid="main", 
-                model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
-                allowed_capabilities=["bash", "file.*", "task.*", "subagent.spawn"],
-                sys_prompt=SYSTEM_PROMPT
-            ),
+            agent=mainagent,
             tool_providers=[BuildinToolProvider.get_instance()],
             skill_proviers=[StaticSkillsLoader(WORKDIR / "skills")], 
             middleware_factories=[TaskTrackerFactory(3)],

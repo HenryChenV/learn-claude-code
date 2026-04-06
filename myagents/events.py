@@ -114,7 +114,17 @@ class ToolResultEvent(SystemEvent):
 
     tool_name: str
     tool_use_id: str
-    tool_output: str
+    output: str
+
+
+@dataclass(frozen=True, kw_only=True)
+class SkillResultEvent(SystemEvent):
+
+    source_name: str = "SkillManager"
+
+    tool_name: str
+    tool_use_id: str
+    output: str
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -266,11 +276,25 @@ class ConsoleEventRenderer:
                 )
 
             case ToolResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
-                                 tool_output=tool_output):
+                                 output=output):
                 if tool_name == "bash":
-                    body = Syntax(truncate(tool_output, 100), "bash", theme="monokai", line_numbers=False)
+                    body = Syntax(truncate(output, 150), "bash", theme="monokai", line_numbers=False)
                 else:
-                    body = f"{tool_name} -> {tool_output}"
+                    body = f"{tool_name} -> {truncate(output, 150)}"
+
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="ToolResult", color="blue",
+                        signature=f"{tool_name}/{tool_use_id}"
+                    ),
+                    body=body
+                )
+
+            case SkillResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
+                                 output=output):
+                body = f"{tool_name} -> {truncate(output, 150)}"
 
                 self._print(
                     header=self.render_header(event=event),
