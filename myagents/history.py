@@ -2,12 +2,14 @@
 """
 
 
-from typing import Literal, Sequence
+from typing import Iterable, Literal, Optional
+
+from anthropic.types import MessageParam
 
 
 class History:
 
-    _messages: list[dict]
+    _messages: list[MessageParam]
 
     def __init__(self):
         self._messages = []
@@ -16,5 +18,11 @@ class History:
         self._messages.append({"role": role, "content": content})
 
     @property
-    def messages(self) -> Sequence[dict]:
+    def messages(self) -> Iterable[MessageParam]:
         return tuple(self._messages)
+
+    @property
+    def latest(self) -> Optional[MessageParam]:
+        if self._messages:
+            return self._messages[-1]
+        return None

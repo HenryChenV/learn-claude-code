@@ -3,7 +3,8 @@
 
 
 from dataclasses import dataclass
-from typing import Optional, Union
+from enum import Enum
+from typing import Iterable, Optional, Union
 
 
 @dataclass(frozen=True)
@@ -103,7 +104,7 @@ class CapabilityEvaluator:
 
     _rules: frozenset[CapabilityRule]
 
-    def __init__(self, rules: list[CapabilityRule]):
+    def __init__(self, rules: Iterable[CapabilityRule]):
         self._rules = frozenset(rules)
 
     def is_allowed(self, required_capabilities: list[str]) -> bool:
@@ -133,3 +134,30 @@ class CapabilityEvaluator:
             allowed = True
 
         return allowed is True
+
+
+class Capability(Enum):
+
+    # default
+    DEFAULT = "default"
+
+    # bash
+    BASH = "bash"
+
+    # file
+    FILE_READ = "file.read"
+    FILE_WRITE = "file.write"
+    FILE_EDIT = "file.edit"
+
+    # task
+    TASK_CREATE = "task.create"
+    TASK_START = "task.start"
+    TASK_COMPLETE = "task.complete"
+    TASK_PROGRESS_GET = "task.progress.get"
+    TASK_DETAILS_GET = "task.details.get"
+
+    # skill
+    SKILL_USE = "skill.use"
+
+    # subagent
+    SUBAGENT_SPAWN = "subagent.spawn"

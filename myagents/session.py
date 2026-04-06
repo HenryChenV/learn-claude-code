@@ -3,16 +3,20 @@ Session management for myagents.
 """
 
 
+from functools import cached_property
 from mailbox import Message
-from typing import Generator, Literal, Optional, Protocol, Self, Sequence, Any
+from typing import Generator, Iterable, Literal, Optional, Protocol, Self, Any
 
-from anthropic.types import Message
+from anthropic.types import Message, MessageParam
 from typing_extensions import override
 
-from .ids import HierarchicalID
-from .tools.core.tool import FunctionTool
+from myagents.events import Iterable
+from myagents.skill import SkillManager, SkillMeta, SkillProvider
 
-from .tools.core.capability import CapabilityRule
+from .ids import HierarchicalID
+from .tools.core.tool import FunctionTool, ToolMeta
+
+from .capability import Capability, CapabilityRule
 
 
 from .agent import Agent, AgentRunContext
@@ -20,17 +24,6 @@ from .tools.core import Tool, ToolManager
 from .tools.core.provider import ToolProvider
 from .events import *
 from .history import History
-
-
-class SessionBuildinToolProvider:
-
-    _tools: list[Tool]
-
-    def __init__(self, tools: list[Tool]):
-        self._tools = tools
-
-    def get_tools(self) -> list[Tool]:
-        return self._tools
 
 
 class _AgentRunContext(AgentRunContext):
@@ -41,7 +34,7 @@ class _AgentRunContext(AgentRunContext):
         self._session = session
 
     @override
-    def get_inputs(self) -> Sequence[dict]:
+    def get_inputs(self) -> Iterable[MessageParam]:
         """get inputs
         """
         return self._session.history
@@ -53,16 +46,44 @@ class _AgentRunContext(AgentRunContext):
         self._session.append_message(role, content)
 
     @override
-    def resolve_tools(self, allowed_capabilities: list[CapabilityRule]) -> tuple[Tool, ...]:
-        """resolve tools by allowed capabilities
-        """
-        return self._session._tool_manager.resolve_tools_by_capabilities(allowed_capabilities)
+    def resolve_skills(self, allowed_capabilities: list[CapabilityRule], 
+                       extra_providers: Iterable[SkillProvider] = []) -> Iterable[SkillMeta]:
+        return self._session._skill_manager.resolve_skills(
+            allowed_capabilities, extra_providers=extra_providers)
 
     @override
-    def use_tool(self, allowed_capabilities: list[CapabilityRule], tool_to_use: str, **tool_kwargs) -> str:
+    def is_skill_use(self, tool_name: str) -> bool:
+        return self._session.skill_use.meta.name == tool_name
+
+    @override
+    def use_skill(self, 
+                  allowed_capabilities: list[CapabilityRule], 
+                  skill_kwargs: dict, 
+                  extra_providers: Iterable[SkillProvider] = []) -> str:
+        try:
+        except Exception as e:
+            return f"Error use skill '{skill_kwargs}': {e}"
+
+    @override
+    def resolve_tools(self, allowed_capabilities: list[CapabilityRule], extra_providers: list[ToolProvider] = []) -> Iterable[ToolMeta]:
+        """resolve tools by allowed capabilities
+        """
+        return self._session._tool_manager.resolve_tools(allowed_capabilities, extra_providers=extra_providers)
+
+    @override
+    def use_tool(self, 
+                 allowed_capabilities: list[CapabilityRule], 
+                 tool_name: str, 
+                 tool_kwargs: dict,
+                 extra_providers: Iterable[ToolProvider] = []) -> str:
         """use tools subjected to allowed capabilities
         """
-        return self._session._tool_manager.execute(allowed_capabilities, tool_to_use, **tool_kwargs)
+        return self._session.use_tool(
+            allowed_capabilities=allowed_capabilities,
+            tool_name=tool_name,
+            tool_kwargs=tool_kwargs,
+            extra_providers=extra_providers
+        )
 
     @override
     def post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
@@ -105,7 +126,8 @@ class Session:
     def __init__(self, 
                  sid: str | SessionID,
                  agent: Agent, 
-                 tool_providers: list[ToolProvider],
+                 tool_providers: list[ToolProvider] = [],
+                 skill_proviers: list[SkillProvider] = [],
                  middleware_factories: list['SessionMiddlewareFactory'] = [],
                  user="You",
                  theme_color="") -> None:
@@ -121,6 +143,7 @@ class Session:
         self._history = History()
 
         self._tool_manager = ToolManager(initial_providers=tool_providers + [self])
+        self._skill_manager = SkillManager(initial_providers=skill_proviers)
 
         # create middlewares
         self._middlewares = []
@@ -159,9 +182,44 @@ class Session:
         # Run the agent loop until it stops
         return (yield from self._agent.run(_AgentRunContext(self)))
 
-    def get_tools(self) -> list[Tool]:
+    def use_skill(self, 
+                  allowed_capabilities: list[CapabilityRule], 
+                  skill_kwargs: dict, 
+                  extra_providers: Iterable[SkillProvider] = []) -> str:
+        try:
+            self.skill_use.validate(skill_kwargs)
+            return self._skill_manager.get_content(
+                allowed_capabilities=allowed_capabilities,
+                skill_name=str(skill_kwargs.get("skill_name")),
+                extra_providers=extra_providers
+            )
+        except Exception as e:
+            return f"Error: Failed to use skill with '{skill_kwargs}': {e}"
+        
+    def use_tool(self, 
+                allowed_capabilities: Iterable[CapabilityRule], 
+                tool_name: str, 
+                tool_kwargs: dict,
+                extra_providers: Iterable[ToolProvider] = []) -> str:
+        try:
+            return self._tool_manager.execute(
+                allowed_capabilities, 
+                tool_name, 
+                tool_kwargs, 
+                extra_providers=extra_providers
+            )
+        except Exception as e:
+            return f"Error: Failed to use tool '{tool_name}': {e}"
 
-        @FunctionTool.wrapper(required_capabilities="subagent.spawn")
+    def get_tools(self) -> Iterable[Tool]:
+        return [
+            self.subagent_spawn, 
+            self.skill_use,
+        ]
+
+    @cached_property
+    def subagent_spawn(self) -> Tool:
+        @FunctionTool.wrapper(required_capabilities=Capability.SUBAGENT_SPAWN.value)
         def spawn_subagent(prompt: str):
             """Spawn a subagent to run task.
             
@@ -184,9 +242,20 @@ class Session:
                     console.print(next(gen))
                 except StopIteration as e:
                     return e.value
+        return spawn_subagent
 
-        return [spawn_subagent]
-            
+    @cached_property
+    def skill_use(self) -> Tool:
+        @FunctionTool.wrapper(required_capabilities=Capability.SKILL_USE.value)
+        def use_skill(skill_name: str) -> str:
+            """load content of the skill by name 
+            if the description matches your needs.
+            """
+            raise RuntimeError(
+                "The tool should not be used in this way. "
+                "It MUST be a bug. Ask user to fix it"
+            )
+        return use_skill
 
     def _post_step(self, resp: Message) -> Generator[Event, None, Optional[bool]]:
         loop_completed = None
@@ -211,11 +280,11 @@ class Session:
         return self._round_counter
 
     @property
-    def history(self) -> Sequence[dict]:
+    def history(self) -> Iterable[MessageParam]:
         return self._history.messages
 
     @property
-    def latest_message(self) -> Optional[dict]:
+    def latest_message(self) -> Optional[MessageParam]:
         """
         get latest message
 
@@ -223,9 +292,7 @@ class Session:
             Optional[dict]: 
                 None if no message or the latest one
         """
-        if self._history.messages:
-            return self._history.messages[-1]
-        return None
+        return self._history.latest
 
     @property
     def sid(self) -> SessionID:

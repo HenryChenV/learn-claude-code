@@ -3,6 +3,10 @@ import os
 from dotenv import load_dotenv
 from rich.console import Console
 
+from myagents.common import WORKDIR
+from myagents.skill import StaticSkillsLoader
+from myagents.tools import BuildinToolProvider
+
 from .models import ModelManager
 
 from .events import (
@@ -11,13 +15,7 @@ from .events import (
 )
 from .task_tracker import TaskTrackerFactory
 from .agent import Agent
-from .tools.impls import (
-    run_bash, 
-    read_file, 
-    write_file, 
-    edit_file
-)
-from .session import Session, SessionBuildinToolProvider
+from .session import Session
 
 
 # init env
@@ -78,7 +76,6 @@ class TUI:
         return input()
 
 
-
 if __name__ == "__main__":
     TUI().run(
         Session(
@@ -87,9 +84,10 @@ if __name__ == "__main__":
                 aid="main", 
                 model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
                 allowed_capabilities=["bash", "file.*", "task.*", "subagent.spawn"],
-                system_prompt=SYSTEM_PROMPT
+                sys_prompt=SYSTEM_PROMPT
             ),
-            tool_providers=[SessionBuildinToolProvider([run_bash, read_file, write_file, edit_file])],
+            tool_providers=[BuildinToolProvider.get_instance()],
+            skill_proviers=[StaticSkillsLoader(WORKDIR / "skills")], 
             middleware_factories=[TaskTrackerFactory(3)],
             theme_color="dodger_blue2"
         ),

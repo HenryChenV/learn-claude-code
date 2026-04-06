@@ -1,11 +1,11 @@
-from .tool import Tool, ToolDesc, FunctionTool
+from .tool import Tool, ToolMeta, FunctionTool
 from .registry import ToolRegistry
 from .manager import ToolManager    
 
 
 __all__ = [
     "Tool", 
-    "ToolDesc",
+    "ToolMeta",
     "FunctionTool", 
     "ToolRegistry", 
     "ToolManager"

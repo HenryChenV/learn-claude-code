@@ -4,16 +4,20 @@ Agent class for the myagents package.
 
 
 import traceback
-from typing import Generator, Iterable, Literal, Optional, Self, Sequence, Union
+from typing import Generator, Iterable, Literal, Optional, Self, Union
 
 from anthropic import Omit, omit
-from anthropic.types import Message, TextBlockParam
+from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionParam
+
+from myagents.tools.core.provider import ToolProvider
+
+from .skill import SkillMeta, SkillProvider
 
 from .ids import HierarchicalID
 
-from .tools.core.capability import CapabilityRule
+from .capability import CapabilityRule
 
-from .tools.core import Tool
+from .tools.core import ToolMeta
 from .events import *
 from .models import Model
 
@@ -37,7 +41,7 @@ class AgentRunHooks:
 class AgentRunContext(AgentRunHooks, ABC):
 
     @abstractmethod
-    def get_inputs(self) -> Sequence[dict]:
+    def get_inputs(self) -> Iterable[MessageParam]:
         """get inputs
         """
         pass
@@ -49,13 +53,56 @@ class AgentRunContext(AgentRunHooks, ABC):
         pass
 
     @abstractmethod
-    def resolve_tools(self, allowed_capabilities: list[CapabilityRule]) -> tuple[Tool, ...]:
+    def resolve_skills(self, 
+                       allowed_capabilities: list[CapabilityRule],
+                       extra_providers: Iterable[SkillProvider] = []) -> Iterable[SkillMeta]:
+        """resolve skills by capabilities
+
+        Args:
+            allowed_capabilities (list[CapabilityRule]): capabilities
+
+        Returns:
+            tuple[str, ...]: (name, description) of skills
+        """
+        pass
+
+    @abstractmethod
+    def is_skill_use(self, tool_name: str) -> bool:
+        """if the given tool is to use skill
+        """
+        pass
+
+    @abstractmethod
+    def use_skill(self, 
+                  allowed_capabilities: list[CapabilityRule], 
+                  skill_kwargs: dict, 
+                  extra_providers: Iterable[SkillProvider] = []) -> str:
+        """use skill
+
+        Args:
+            allowed_capabilities (list[CapabilityRule]): allowed capabilities
+            skill_name (str): name of the skill
+            extra_providers (Iterable[ToolProvider], optional): extra providers
+
+        Returns:
+            _type_: content of the skill
+        """
+        pass
+
+    @abstractmethod
+    def resolve_tools(self, 
+                      allowed_capabilities: list[CapabilityRule], 
+                      extra_providers: list[ToolProvider] = []) -> Iterable[ToolMeta]:
         """resolve tools by allowed capabilities
         """
         pass
 
     @abstractmethod
-    def use_tool(self, allowed_capabilities: list[CapabilityRule], tool_to_use: str, **tool_params) -> str:
+    def use_tool(self, 
+                 allowed_capabilities: list[CapabilityRule], 
+                 tool_name: str, 
+                 tool_kwargs: dict, 
+                 extra_providers: Iterable[ToolProvider] = []) -> str:
         """use tools subjected to allowed capabilities
         """
         pass
@@ -96,7 +143,7 @@ class Agent:
     """
 
     _aid: AgentID
-    _system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit
+    _agent_sys_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit
     _model: Model
     _allowed_capabilities: list[CapabilityRule]
     _max_tokens: int
@@ -106,11 +153,11 @@ class Agent:
             aid: Union[str, AgentID], 
             model: Model,
             allowed_capabilities: list[str] = [],
-            system_prompt: Union[str, Iterable[TextBlockParam]] | Omit = omit,
+            sys_prompt: Optional[str] = None,
             max_tokens: int = 8000) -> None:
         self._aid = AgentID.wrap(aid)
         self._model = model
-        self._system_prompt = system_prompt
+        self._agent_sys_prompt = [{"type": "text", "text": sys_prompt}] if sys_prompt else []
         self._allowed_capabilities = [CapabilityRule.wrap(c) for c in allowed_capabilities]
         self._max_tokens = max_tokens
 
@@ -131,9 +178,16 @@ class Agent:
         return self._aid.name
 
     def run(self, ctx: AgentRunContext) -> Generator[Event, None, str]:
+        tool_metas = self._resolve_tools(ctx)
+        skill_prompt = self._resolve_skills_as_prompt(ctx)
+
+        extra_sys_prompts = []
+        if skill_prompt:
+            extra_sys_prompts.append(skill_prompt)
+
         try:
-            tool_descs = self._resolve_tools(ctx)
-            return (yield from self._loop(ctx, tool_descs))
+            return (yield from self._loop(ctx, tool_metas, extra_sys_prompts))
+
         except Exception as e:
             error=f"Error during agent loop: {e}"
             yield AssistantErrorEvent(
@@ -144,14 +198,22 @@ class Agent:
             )
             return error
 
-    def _loop(self, ctx: AgentRunContext, tool_descs: list[dict]) -> Generator[Event, None, str]:
+    def _loop(self, 
+              ctx: AgentRunContext, 
+              tool_metas: list[ToolUnionParam],
+              extra_sys_prompts: Iterable[TextBlockParam],
+        ) -> Generator[Event, None, str]:
         step_counter = 0
         while True:
             step_counter += 1
 
             # Agent takes a step
             try:
-                response = self._chat(ctx.get_inputs(), tool_descs)
+                response = self._chat(
+                    ctx.get_inputs(), 
+                    tool_metas,
+                    extra_sys_prompts=extra_sys_prompts
+                )
             except Exception as e:
                 error=f"Error during agent step: {e}"
                 yield AssistantErrorEvent(
@@ -187,17 +249,26 @@ class Agent:
                     # yield extra tool result for tool_use block
                     if block.type == "tool_use":
                         tool_name = block.name
+                        tool_kwargs = block.input
 
                         # Tool call
-                        output = self._use_tool(ctx, tool_name, **block.input) 
-                        # print(truncate(output))
-                        yield ToolResultEvent(
-                            paths=self._build_paths(ctx, f"step:{step_counter}"),
-                            tool_name=tool_name, 
-                            tool_use_id=block.id, 
-                            tool_output=output,
-                            extra=self._build_event_extra(ctx),
-                        )
+                        # skill use is a special tool use:
+                        # - For other tool uses, only the required capaibilites of tool should be evaluated,
+                        # - For skill use, not only the requried capabilities of the tool should be evaluated, 
+                        #   but also the required capabilities of skill to use should be evaluated. 
+                        #   The allowed capabilities should be given.
+                        if ctx.is_skill_use(tool_name):
+                            output = self._use_skill(ctx, tool_kwargs)
+                        else:
+                            output = self._use_tool(ctx, tool_name, tool_kwargs) 
+                            # print(truncate(output))
+                            yield ToolResultEvent(
+                                paths=self._build_paths(ctx, f"step:{step_counter}"),
+                                tool_name=tool_name, 
+                                tool_use_id=block.id, 
+                                tool_output=output,
+                                extra=self._build_event_extra(ctx),
+                            )
 
                         results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
 
@@ -223,30 +294,61 @@ class Agent:
             if loop_completed:
                 return ctx.get_final_message()
 
-    def _chat(self, inputs: Iterable[dict], tool_descs: list[dict]) -> Message:
+    def _chat(self, 
+              inputs: Iterable[MessageParam], 
+              tool_descs: Iterable[ToolUnionParam],
+              extra_sys_prompts: Iterable[TextBlockParam] = []) -> Message:
         return self._model.chat(
             max_tokens=self._max_tokens,
-            messages=inputs, # type: ignore
-            system_prompt=self._system_prompt,
-            tools=tool_descs, # type: ignore
+            messages=inputs,
+            system_prompt=self._agent_sys_prompt,
+            tools=tool_descs,
         )
 
-    def _resolve_tools(self, ctx: AgentRunContext) -> list[dict]:
-        tools = ctx.resolve_tools(self._allowed_capabilities)
+    def _resolve_tools(self, ctx: AgentRunContext) -> list[ToolUnionParam]:
+        tools = ctx.resolve_tools(
+            allowed_capabilities=self._allowed_capabilities,
+            extra_providers=[]
+        )
         return [self._build_tool_desc(t) for t in tools]
 
-    def _build_tool_desc(self, tool: Tool) -> dict:
+    def _resolve_skills_as_prompt(self, ctx: AgentRunContext) -> TextBlockParam:
+        skills = ctx.resolve_skills(self._allowed_capabilities)
+
+        if not skills:
+            skill_prompt = "no skill available"
+        else:
+            skill_prompt = (
+                "Available Skill:"
+                "\n".join(f"  - {str(s)}" for s in skills)
+            )
+        return {"type": "text", "text": skill_prompt}
+
+    def _build_tool_desc(self, meta: ToolMeta) -> ToolUnionParam:
         return {
-            "name": tool.desc.name,
-            "description": tool.desc.description,
-            "input_schema": tool.desc.input_schema,
+            "name": meta.name,
+            "description": meta.description,
+            "input_schema": meta.input_schema,
         }
 
-    def _use_tool(self, ctx: AgentRunContext, tool_name, **tool_input) -> str:
+    def _use_skill(self,
+                   ctx: AgentRunContext,
+                   tool_kwargs: dict) -> str:
+        return ctx.use_skill(
+            allowed_capabilities=self._allowed_capabilities,
+            skill_kwargs=tool_kwargs,
+            extra_providers=[]
+        )
+
+    def _use_tool(self, 
+                  ctx: AgentRunContext, 
+                  tool_name: str, 
+                  tool_kwargs: dict) -> str:
         return ctx.use_tool(
             allowed_capabilities=self._allowed_capabilities, 
-            tool_to_use=tool_name, 
-            **tool_input
+            tool_name=tool_name, 
+            tool_kwargs=tool_kwargs,
+            extra_providers=[]
         )
 
     def _build_paths(self, ctx: AgentRunContext, *parts):

@@ -13,12 +13,13 @@ import jsonschema
 
 
 @dataclass(frozen=True)
-class ToolDesc:
+class ToolMeta:
     """Description of the Tool
     """
     name: str
     description: str
     input_schema: dict
+    required_capabilities: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if not self.name:
@@ -28,14 +29,6 @@ class ToolDesc:
         if not self.input_schema:
             raise ValueError("Tool input_schema cannot be empty.")
 
-
-@dataclass(frozen=True)
-class Tool(ABC):
-
-    desc: ToolDesc
-    required_capabilities: list[str] = field(default_factory=list)
-
-    def __post_init__(self):
         # make sure required_capabilities is not empty
         required_capabilities = self.required_capabilities or ["default"]
         # make required_capablities immuatable
@@ -45,15 +38,21 @@ class Tool(ABC):
             tuple(required_capabilities)
         )
 
+
+@dataclass(frozen=True)
+class Tool(ABC):
+
+    meta: ToolMeta
+
     def __call__(self, **kwargs) -> str:
-        self._validate(kwargs)
+        self.validate(kwargs)
         return self._run(**kwargs)
 
-    def _validate(self, kwargs):
+    def validate(self, kwargs):
         try:
-            jsonschema.validate(instance=kwargs, schema=self.desc.input_schema)
+            jsonschema.validate(instance=kwargs, schema=self.meta.input_schema)
         except jsonschema.ValidationError as e:
-            raise ValueError(f"Invalid input for tool '{self.desc.name}': {e.message}")
+            raise ValueError(f"Invalid input for tool '{self.meta.name}': {e.message}")
 
     @abstractmethod
     def _run(self, **kwargs) -> str:
@@ -115,13 +114,13 @@ class FunctionTool(Tool):
                 raise ValueError(f"Failed to infer tool input schema from function {func}. Please provide an input_schema.")
 
             return cls(
-                desc=ToolDesc(
+                meta=ToolMeta(
                     name=tool_name, 
                     description=tool_description, 
                     input_schema=tool_input_schema,
+                    required_capabilities=tool_required_capabilities,
                 ),
                 func=func, 
-                required_capabilities=tool_required_capabilities
             )
 
         if func is None:

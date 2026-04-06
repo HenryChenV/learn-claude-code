@@ -6,10 +6,12 @@
 
 from enum import Enum
 from mailbox import Message
-from typing import Generator, Optional
+from typing import Generator, Iterable, Optional
 from typing_extensions import override
 
 from anthropic.types import Message
+
+from myagents.capability import Capability
 
 from .session import Session, SessionMiddleware
 from .tools.core import Tool, FunctionTool
@@ -165,10 +167,10 @@ class TaskManager:
             return "no task yet"
         return self._current_task.detail
 
-    def get_tools(self) -> list[Tool]:
+    def get_tools(self) -> Iterable[Tool]:
         if self._task_tools is None:
 
-            @FunctionTool.wrapper(required_capabilities="task.create")
+            @FunctionTool.wrapper(required_capabilities=Capability.TASK_CREATE.value)
             def create_task(task_name: str, steps: list[str]) -> str:
                 """ Create task with task name and steps. 
                     You have to confirme with user before creating the task.
@@ -178,7 +180,7 @@ class TaskManager:
                 """
                 return self.create_task(task_name, steps)
 
-            @FunctionTool.wrapper(required_capabilities="task.start")
+            @FunctionTool.wrapper(required_capabilities=Capability.TASK_START.value)
             def start_task() -> str:
                 """start the task which means you will start the first step of the task.
                 """
@@ -190,13 +192,13 @@ class TaskManager:
                 """
                 return self.complete_step(step_no)
 
-            @FunctionTool.wrapper(required_capabilities="task.progress.get")
+            @FunctionTool.wrapper(required_capabilities=Capability.TASK_PROGRESS_GET.value)
             def get_task_progress():
                 """get progress of current task
                 """
                 return self.current_task_progress
 
-            @FunctionTool.wrapper(required_capabilities="task.details.get")
+            @FunctionTool.wrapper(required_capabilities=Capability.TASK_DETAILS_GET.value)
             def get_task_details():
                 """ get the details of task
                 """
@@ -209,7 +211,7 @@ class TaskManager:
                 get_task_progress, 
                 get_task_details
             ]
-            self._task_tool_names = [t.desc.name for t in self._task_tools]
+            self._task_tool_names = [t.meta.name for t in self._task_tools]
 
         return self._task_tools
 

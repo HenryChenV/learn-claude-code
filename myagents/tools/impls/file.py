@@ -1,9 +1,9 @@
 from pathlib import Path
 
+from myagents.capability import Capability
+
 from ..core import FunctionTool
-
-
-WORKDIR = Path.cwd()
+from common import WORKDIR
 
 
 def safe_path(p: str) -> Path:
@@ -13,7 +13,7 @@ def safe_path(p: str) -> Path:
     return path
 
 
-@FunctionTool.wrapper(required_capabilities="file.read")
+@FunctionTool.wrapper(required_capabilities=Capability.FILE_READ.value)
 def read_file(path: str, limit: int = 50000) -> str:
     """Read file contents with optional line limit (default is 50000). 
     """
@@ -35,7 +35,7 @@ def read_file(path: str, limit: int = 50000) -> str:
         return f"Error: failed to read {path}: {e}"
 
 
-@FunctionTool.wrapper(required_capabilities="file.write")
+@FunctionTool.wrapper(required_capabilities=Capability.FILE_WRITE.value)
 def write_file(path: str, content: str) -> str:
     """Write content to a file.
     """
@@ -48,7 +48,7 @@ def write_file(path: str, content: str) -> str:
         return f"Error: failed to write to {path}: {e}"
 
 
-@FunctionTool.wrapper(required_capabilities="file.edit")
+@FunctionTool.wrapper(required_capabilities=Capability.FILE_EDIT.value)
 def edit_file(path: str, old_content, new_content: str) -> str:
     """Edit a file by replacing exact text in file.
     """

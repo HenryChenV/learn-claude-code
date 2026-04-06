@@ -1,13 +1,15 @@
 import os
 import subprocess
 
+from myagents.capability import Capability
+
 from ..core import FunctionTool
 
 
 DANGEROUS_COMMANDS = frozenset({"rm -rf /", "sudo", "shutdown", "reboot", "> /dev/"})
 
 
-@FunctionTool.wrapper(name="bash", required_capabilities="bash")
+@FunctionTool.wrapper(name="bash", required_capabilities=Capability.BASH.value)
 def run_bash(command: str) -> str:
     """ Run a shell command
     """

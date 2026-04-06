@@ -2,14 +2,14 @@
 """
 
 from abc import abstractmethod
-from typing import Protocol
+from typing import Iterable, Protocol
 
 from .tool import Tool
 
 
 class ToolProvider(Protocol):
 
-    def get_tools(self) -> list[Tool]: 
+    def get_tools(self) -> Iterable[Tool]: 
         """get all tools
 
         Returns:

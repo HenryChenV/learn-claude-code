@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 import copy
 import os
 from anthropic import Anthropic, Omit, omit
-from anthropic.types import Message, TextBlockParam
+from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionParam
 from typing import Any, Iterable, Union
 
 
@@ -22,15 +22,15 @@ class Model:
     @abstractmethod
     def chat(self, 
              max_tokens: int,
-             messages: Iterable[dict], 
+             messages: Iterable[MessageParam], 
              system_prompt:Union[str, Iterable[TextBlockParam]] | Omit = omit,
-             tools: list[dict] = []) -> Message:
+             tools: Iterable[ToolUnionParam] | Omit = omit) -> Message:
         return self._client.messages.create(
             max_tokens=max_tokens,
-            model=self._model_id, # type: ignore
+            model=self._model_id, 
             system=system_prompt,
-            messages=messages, # type: ignore
-            tools=tools, # type: ignore
+            messages=messages, 
+            tools=tools, 
         )
 
 

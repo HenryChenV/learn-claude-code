@@ -2,14 +2,11 @@
 """
 
 
-from collections import defaultdict
-from json import tool
-from math import log
-from typing import Sequence
+from typing import Iterable, Optional
 
-from .capability import CapabilityEvaluator, CapabilityRule
+from myagents.capability import CapabilityEvaluator, CapabilityRule
 
-from .tool import Tool
+from .tool import Tool, ToolMeta
 from .provider import ToolProvider
 
 from myagents.log import get_logger
@@ -21,15 +18,13 @@ logger = get_logger(__name__)
 
 class ResolvedToolsCacheValue:
 
-    _tools: tuple[Tool, ...]
-    _tool_by_name: dict[str, Tool]
-
     def __init__(self, tools: tuple[Tool, ...]):
-        self._tools = tools
-        self._tool_by_name = {t.desc.name: t for t in tools}
+        self._tools: tuple[Tool, ...] = tools
+        self._tool_metas: dict[str, ToolMeta] = {t.meta.name: t.meta for t in tools}
+        self._tool_by_name: dict[str, Tool] = {t.meta.name: t for t in tools}
 
-    def get_all(self) -> tuple[Tool, ...]:
-        return self._tools
+    def get_metas(self) -> dict[str, ToolMeta]:
+        return self._tool_metas
 
     def get_by_name(self, name) -> Tool | None:
         return self._tool_by_name.get(name)
@@ -45,12 +40,11 @@ class ToolManager:
     """
 
     _providers: list[ToolProvider]
-    _resolved_tools_cache: dict[frozenset, ResolvedToolsCacheValue] | None
+    _resolved_tools_cache: dict[frozenset[CapabilityRule], ResolvedToolsCacheValue]
 
     def __init__(self, initial_providers: list[ToolProvider] = []):
         self._providers = []
-
-        self._resolved_tools_cache = None
+        self._resolved_tools_cache = {}
 
         if initial_providers:
             self.add_providers(*initial_providers)
@@ -83,65 +77,104 @@ class ToolManager:
         self._providers.remove(provider)
         self._invalid_tools_cache()
 
-    def resolve_tools_by_capabilities(self, capabilities: list[CapabilityRule]) -> tuple[Tool, ...]:
+    def resolve_tools(self, 
+                      allowed_capabilities: Iterable[CapabilityRule],
+                      extra_providers: Iterable[ToolProvider]) -> Iterable[ToolMeta]:
         """resolve tools by capabilities
 
-        Iterate providers from newest to oldest.
-        Pick the newer one if the name is duplicated
+        The new one will overwrite the old one if the name of tool is duplicated.
+        Tools provided by extra_providers will overwrite existing one.
+        Tools resoved from extra_providers will not be cached.
         """
-        return self._get_or_resolved_tools_by_capabilities(capabilities).get_all()
+        tools = self._get_or_resolve_tools(allowed_capabilities).get_metas()
 
-    def _get_or_resolved_tools_by_capabilities(self, capabilities: list[CapabilityRule]) -> ResolvedToolsCacheValue:
+        if extra_providers:
+            extra_tools = self._find_tools(
+                allowed_capabilities=allowed_capabilities,
+                providers=extra_providers
+            )
+            if extra_tools:
+                # overwrite tools by name
+                tools.update({name: tool.meta for name, tool in extra_tools.items()})
+
+        return tools.values()
+
+    def _get_or_resolve_tools(self, allowed_capabilities: Iterable[CapabilityRule]) -> ResolvedToolsCacheValue:
+        """get or resolve tools by capabilities
+
+        If the capabilities hint cache, return it from cache.
+        Or resolve tools, update cache and return
+
+        Args:
+            capabilities (list[CapabilityRule]): allowed capabilities
+
+        Returns:
+            ResolvedToolsCacheValue: cached value
+        """
         if self._resolved_tools_cache is None:
             self._resolved_tools_cache = {}
 
-        cache_key = frozenset(capabilities)
+        cache_key = frozenset(allowed_capabilities)
 
-        if not cache_key in self._resolved_tools_cache:
-            tools = self._find_tools_by_capabilities(capabilities)
-            self._resolved_tools_cache[cache_key] = ResolvedToolsCacheValue(tools)
-            logger.debug(f"resolve tools by {capabilities} -> {tools}")
+        if cache_key not in self._resolved_tools_cache:
+            tools = self._find_tools(
+                allowed_capabilities=allowed_capabilities,
+                providers=self._providers
+            )
+            cache_value = ResolvedToolsCacheValue(tuple(tools.values()))
+            self._resolved_tools_cache[cache_key] = cache_value
+            logger.debug(f"resolve tools by {allowed_capabilities} -> {tools}")
 
         return self._resolved_tools_cache[cache_key]
 
-    def _find_tools_by_capabilities(self, capabilities: list[CapabilityRule]) -> tuple[Tool, ...]:
-        evaluator = CapabilityEvaluator(capabilities)
+    def _find_tools(self, 
+                    allowed_capabilities: Iterable[CapabilityRule], 
+                    providers: Iterable[ToolProvider]) -> dict[str, Tool]:
+        evaluator = CapabilityEvaluator(allowed_capabilities)
         allowed_tools: dict[str, Tool] = {}
 
-        # traverse provders in reverse order
-        for provider in reversed(self._providers):
-            tools = provider.get_tools()
-            for tool in tools:
-                if not evaluator.is_allowed(tool.required_capabilities):
+        # the older one will be skipped
+        for provider in reversed(list(providers)):
+            provided_tools = provider.get_tools()
+            for tool in provided_tools:
+                if not evaluator.is_allowed(tool.meta.required_capabilities):
                     # capabilities not matched
                     continue
-                if tool.desc.name in allowed_tools:
-                    # newer tool selected
+                if tool.meta.name in allowed_tools:
+                    # skip if name is duplicated
                     continue
-                allowed_tools[tool.desc.name] = tool
-        return tuple(allowed_tools.values())
+                # select the first allowed one
+                allowed_tools[tool.meta.name] = tool
+        return allowed_tools
+
+    def _find_first_tool(self, 
+                         tool_name: str, 
+                         allowed_capabilities: Iterable[CapabilityRule], 
+                         providers: Iterable[ToolProvider]) -> Optional[Tool]:
+        evaluator = CapabilityEvaluator(allowed_capabilities)
+
+        # the older one will be skipped
+        for provider in reversed(list(providers)):
+            provided_tools = provider.get_tools()
+            for tool in provided_tools:
+                if tool_name != tool.meta.name:
+                    continue
+                if not evaluator.is_allowed(tool.meta.required_capabilities):
+                    # capabilities not matched
+                    continue
+                # return the first caplibities matched tool
+                return tool
+
+        return None
 
     def _invalid_tools_cache(self):
-        self._resolved_tools_cache = None
-
-    def _get_tools_as_map(self) -> dict[str, Tool]:
-        stats: dict[str, list[tuple[ToolProvider, Tool]]] = defaultdict(list)
-        map: dict[str, Tool] = {}
-        for p in self._providers:
-            for t in p.get_tools():
-                map[t.desc.name] = t
-                stats[t.desc.name].append((p, t))
-
-        for tool_name, provided in stats.items():
-            if len(provided) > 1:
-                logger.warning(f"Tool {tool_name} has multiple providers: {provided}")
-
-        return map
+        self._resolved_tools_cache.clear()
 
     def execute(self, 
-                allowed_capabilities: list[CapabilityRule], 
-                target_tool: str, 
-                **kwargs) -> str:
+                allowed_capabilities: Iterable[CapabilityRule], 
+                tool_name: str, 
+                tool_kwargs: dict,
+                extra_providers: Iterable[ToolProvider] = []) -> str:
         """execute the tools with allowed_capabilities
 
         Note: 
@@ -153,17 +186,26 @@ class ToolManager:
         # TODO distinguish between different errors 
         # to facilitate better error handling by the agent .
         # e.g. tool not allowed / permisson denied vs tool execution error
-        try:
-            return self._execute(allowed_capabilities, target_tool, **kwargs)
-        except Exception as e:
-            return f"Error executing tool '{target_tool}': {e}"
 
-    def _execute(self, allowed_capabilities: list[CapabilityRule], target_tool: str, **kwargs) -> str:
-        cached = self._get_or_resolved_tools_by_capabilities(allowed_capabilities)
+        tool = None
+        # try to find the tool in extra_providers first
+        if extra_providers:
+            tool = self._find_first_tool(
+                tool_name=tool_name,
+                allowed_capabilities=allowed_capabilities,
+                providers=extra_providers,
+            )
 
-        tool = cached.get_by_name(target_tool)
+        # If tool doesn't exist in extra_providers,
+        # try to find the tool in holded providers
+        if not tool:
+            # this method is the same one used in resolve_tools,
+            # which provides the same view as the resolution phase.
+            cached = self._get_or_resolve_tools(allowed_capabilities)
+            tool = cached.get_by_name(tool_name)
+
         if not tool:
             raise RuntimeError(
-                f"Tool {target_tool} is not supported yet. Please check if the tool exists or capabilities are allowed")
+                f"Tool {tool_name} is not supported yet. Please check if the tool exists or capabilities are allowed")
 
-        return tool(**kwargs)
+        return tool(**tool_kwargs)
