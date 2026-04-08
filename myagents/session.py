@@ -23,7 +23,7 @@ from .agent import Agent, AgentRunContext
 from .tools.core import Tool, ToolManager
 from .tools.core.provider import ToolProvider
 from .events import *
-from .history import History
+from .conversation import Conversation
 
 
 class _AgentRunContext(AgentRunContext):
@@ -37,11 +37,11 @@ class _AgentRunContext(AgentRunContext):
     def get_inputs(self) -> Iterable[MessageParam]:
         """get inputs
         """
-        return self._session.history
+        return self._session.messages
 
     @override
     def append_message(self, role: Literal["user", "assistant"], content) -> None:
-        """append message to history
+        """append message to conversation
         """
         self._session.append_message(role, content)
 
@@ -118,7 +118,7 @@ class SessionID(HierarchicalID):
 class Session:
 
     _sid: SessionID
-    _history: History
+    _conversation: Conversation
     _agent: Agent
     _tool_providers: list[ToolProvider]
     _tool_manager: ToolManager
@@ -145,7 +145,7 @@ class Session:
         self._theme_color = theme_color
 
         self._round_counter = 0
-        self._history = History()
+        self._conversation = Conversation()
 
         self._tool_manager = ToolManager(initial_providers=tool_providers + [self])
         self._skill_manager = SkillManager(initial_providers=skill_proviers)
@@ -275,7 +275,7 @@ class Session:
         self._tool_manager.add_provider(provider)
 
     def append_message(self, role: Literal["user", "assistant"], content):
-        self._history.append(role, content)
+        self._conversation.append(role, content)
 
     def extend_paths(self, *parts: str) -> list[str]:
         return [f"session:{self.sid.id}", f"round:{self.rounds}"] + list(parts)
@@ -285,8 +285,8 @@ class Session:
         return self._round_counter
 
     @property
-    def history(self) -> Iterable[MessageParam]:
-        return self._history.messages
+    def messages(self) -> Iterable[MessageParam]:
+        return self._conversation.messages
 
     @property
     def latest_message(self) -> Optional[MessageParam]:
@@ -297,7 +297,7 @@ class Session:
             Optional[dict]: 
                 None if no message or the latest one
         """
-        return self._history.latest
+        return self._conversation.latest
 
     @property
     def sid(self) -> SessionID:

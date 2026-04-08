@@ -1,4 +1,4 @@
-"""Conversation History
+"""Conversation 
 """
 
 
@@ -7,7 +7,7 @@ from typing import Iterable, Literal, Optional
 from anthropic.types import MessageParam
 
 
-class History:
+class Conversation:
 
     _messages: list[MessageParam]
 

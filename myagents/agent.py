@@ -48,7 +48,7 @@ class AgentRunContext(AgentRunHooks, ABC):
 
     @abstractmethod
     def append_message(self, role: Literal["user", "assistant"], content):
-        """append message to history
+        """append message to conversation
         """
         pass
 
@@ -227,7 +227,7 @@ class Agent:
                 # Tool Use
                 # Execute each tool call, collect results, 
                 # or call sub-agents as needed, 
-                # and append results to history for next step
+                # and append results to conversation for next step
 
                 loop_completed = False
 
