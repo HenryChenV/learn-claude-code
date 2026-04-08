@@ -9,7 +9,7 @@ from myagents.common import WORKDIR
 from myagents.skill import StaticSkillsLoader
 from myagents.tools import BuildinToolProvider
 
-from .models import ModelManager
+from .chat_model import ChatModelManager
 
 from .events import (
     EventRenderer, 
@@ -81,7 +81,7 @@ class TUI:
 if __name__ == "__main__":
     mainagent = Agent(
         aid="main", 
-        model=ModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
+        model=ChatModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
         allowed_capabilities=[
             Capability.BASH.value,
             Capability.FILE_READ.value,

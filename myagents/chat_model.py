@@ -10,7 +10,7 @@ from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionPara
 from typing import Any, Iterable, Union
 
 
-class Model:
+class ChatModel:
 
     _model_id: str
     _client: Anthropic
@@ -34,16 +34,16 @@ class Model:
         )
 
 
-class ModelProvider(ABC):
+class ChatModelProvider(ABC):
 
     _name: str
     _client: Anthropic
-    _models: dict[str, Model]
+    _models: dict[str, ChatModel]
 
     def __init__(self, name, model_ids: list[str], api_key, base_url=None):
         self._name = name
         self._client = Anthropic(base_url=base_url, api_key=api_key)
-        self._models = {m: Model(self._client, m) for m in model_ids}
+        self._models = {m: ChatModel(self._client, m) for m in model_ids}
 
     def get_model(self, model_id: str): 
         """get mdoel by model_id
@@ -65,17 +65,17 @@ MODEL_LIST = {
 }
 
 
-class ModelManager:
+class ChatModelManager:
 
     _model_list: dict[str, dict[str, Any]]
-    _provider_cache: dict[str, ModelProvider]
+    _provider_cache: dict[str, ChatModelProvider]
 
     def __init__(self, 
                  model_list: dict[str, dict[str, Any]]): 
         self._model_list = copy.deepcopy(model_list)
         self._provider_cache = {}
 
-    def get_model(self, provider: str, model: str) -> Model:
+    def get_model(self, provider: str, model: str) -> ChatModel:
         if provider not in self._model_list:
             raise ValueError(
                 f"Provider {provider} is not supported." 
@@ -102,7 +102,7 @@ class ModelManager:
                     f"The envrionment variable of API Key '{env_var}' "
                     f"for Provider {provider} is not configured."
                 )
-            self._provider_cache[provider] = ModelProvider(
+            self._provider_cache[provider] = ChatModelProvider(
                 name=provider,
                 model_ids=provider_conf["models"],
                 api_key=api_key,
@@ -112,8 +112,8 @@ class ModelManager:
         return self._provider_cache[provider].get_model(model_id=model) 
 
     @classmethod
-    def get_default(cls) -> 'ModelManager':
+    def get_default(cls) -> 'ChatModelManager':
         return DEFAULT_MODEL_MANAGER
 
 
-DEFAULT_MODEL_MANAGER = ModelManager(MODEL_LIST)
+DEFAULT_MODEL_MANAGER = ChatModelManager(MODEL_LIST)

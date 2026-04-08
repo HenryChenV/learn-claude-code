@@ -19,7 +19,7 @@ from .capability import CapabilityRule
 
 from .tools.core import ToolMeta
 from .events import *
-from .models import Model
+from .chat_model import ChatModel
 
 
 class AgentRunHooks:
@@ -144,14 +144,14 @@ class Agent:
 
     _aid: AgentID
     _agent_sys_prompt: Iterable[TextBlockParam]
-    _model: Model
+    _model: ChatModel
     _allowed_capabilities: list[CapabilityRule]
     _max_tokens: int
 
     def __init__(
             self, 
             aid: Union[str, AgentID], 
-            model: Model,
+            model: ChatModel,
             allowed_capabilities: list[str] = [],
             sys_prompt: Optional[str] = None,
             max_tokens: int = 8000) -> None:
