@@ -3,11 +3,12 @@
 
 
 from abc import ABC, abstractmethod
+from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import json
-from typing import Any, Iterable, Optional, Protocol, overload
+from typing import Any, Callable, Iterable, Optional, Protocol, overload
 from anthropic.types import ContentBlock
 from rich.console import Console
 from rich.markdown import Markdown
@@ -187,6 +188,47 @@ class EventFactory:
                 data=block,
                 extra=extra,
             )
+
+
+class EventSubscriber(Protocol):
+
+    def get_interested_events(self) -> set[type[Event]]: 
+        """return interested events
+        """
+        ...
+
+    def handle_event(self, event: Event) -> None: 
+        """handle events
+        """
+        ...
+
+
+class EventBus:
+
+    def __init__(self, subscribers: set[EventSubscriber] = set()):
+        self._subcribers: set[EventSubscriber] = set()
+        self._subscriptions: dict[type[Event], set[EventSubscriber]] = defaultdict(set)
+
+        for sub in subscribers:
+            self.add_subscriber(sub)
+
+    def add_subscriber(self, subscriber: EventSubscriber) -> None:
+        event_types = subscriber.get_interested_events()
+        if not event_types:
+            return
+        for et in event_types:
+            self._subscriptions[et].add(subscriber)
+
+    def publish(self, event: Event) -> None:
+        handlers: set[EventSubscriber] = set()
+
+        for et in type(event).__mro__:
+            if et not in self._subscriptions:
+                continue
+            handlers.update(self._subscriptions[et])
+        
+        for h in handlers:
+            h.handle_event(event)
 
 
 class EventRenderer(Protocol):

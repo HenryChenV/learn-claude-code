@@ -8,9 +8,12 @@ from mailbox import Message
 from typing import Generator, Iterable, Literal, Optional, Protocol, Self, Any
 
 from anthropic.types import Message, MessageParam
+from rich.prompt import PromptError
 from typing_extensions import override
 
+from myagents.engine import ExecutionEngine
 from myagents.events import Iterable
+from myagents.runner import AgentRunner
 from myagents.skill import SkillManager, SkillMeta, SkillProvider
 
 from .ids import HierarchicalID
@@ -117,41 +120,33 @@ class SessionID(HierarchicalID):
 
 class Session:
 
-    _sid: SessionID
-    _conversation: Conversation
-    _agent: Agent
-    _tool_providers: list[ToolProvider]
-    _tool_manager: ToolManager
-    _middleware_factories: list['SessionMiddlewareFactory']
-    _middlewares: list['SessionMiddleware']
-    _round_counter: int
-    _theme_color: str
-    _user: str
-
     def __init__(self, 
                  sid: str | SessionID,
                  agent: Agent, 
                  tool_providers: list[ToolProvider] = [],
                  skill_proviers: list[SkillProvider] = [],
                  middleware_factories: list['SessionMiddlewareFactory'] = [],
+                 event_bus: Optional[EventBus] = None,
                  user="You",
                  theme_color="") -> None:
 
-        self._sid = SessionID.wrap(sid)
-        self._agent = agent
-        self._tool_providers = tool_providers
-        self._middleware_factories = middleware_factories
-        self._user = user
-        self._theme_color = theme_color
+        self._sid: SessionID = SessionID.wrap(sid)
+        self._agent: Agent = agent
+        self._tool_providers: list[ToolProvider] = tool_providers
+        self._middleware_factories: list[SessionMiddlewareFactory] = middleware_factories
+        self._user: str = user
+        self._theme_color: str = theme_color
 
-        self._round_counter = 0
-        self._conversation = Conversation()
+        self._round_counter: int = 0
+        self._conversation: Conversation = Conversation()
 
-        self._tool_manager = ToolManager(initial_providers=tool_providers + [self])
-        self._skill_manager = SkillManager(initial_providers=skill_proviers)
+        self._tool_manager: ToolManager = ToolManager(initial_providers=tool_providers + [self])
+        self._skill_manager: SkillManager = SkillManager(initial_providers=skill_proviers)
+
+        self._event_bus: EventBus = event_bus or EventBus()
 
         # create middlewares
-        self._middlewares = []
+        self._middlewares: list[SessionMiddleware] = []
         for factory in middleware_factories:
             obj = factory.create(self)
             if obj:
@@ -169,12 +164,11 @@ class Session:
             agent=self._agent.spawn(),
             tool_providers=self._tool_providers,
             middleware_factories=self._middleware_factories,
-            user=self._sid.name
+            user=self._sid.name,
+            event_bus=self._event_bus
         )
 
     def stream(self, prompt: str) -> Generator[Event, None, str]:
-        self._round_counter += 1
-
         # Append user turn
         self.append_message("user", prompt)
         yield UserPromptEvent(
@@ -186,6 +180,36 @@ class Session:
 
         # Run the agent loop until it stops
         return (yield from self._agent.run(_AgentRunContext(self)))
+
+    def subscribe(self, subscriber: EventSubscriber) -> None:
+        """subscribe events
+        """
+        self._event_bus.add_subscriber(subscriber)
+
+    def publish(self, event: Event) -> None:
+        """publish event
+        """
+        self._event_bus.publish(event)
+
+    def append_user_input(self, prompt: str) -> None:
+        self._round_counter += 1
+        self.append_message("user", prompt)
+        self.publish(UserPromptEvent(
+            source_name=self._user,
+            paths=self.extend_paths(), 
+            prompt=prompt, 
+            extra=self.event_extra
+        ))
+
+    def resolve_tools(self, 
+                      allowed_capabilities: Iterable[CapabilityRule],
+                      extra_providers: Iterable[ToolProvider]) -> Iterable[ToolMeta]:
+        return self._tool_manager.resolve_tools(allowed_capabilities, extra_providers)
+
+    def resolve_skills(self, 
+                       allowed_capabilities: Iterable[CapabilityRule], 
+                       extra_providers: Iterable[SkillProvider] = []) -> Iterable[SkillMeta]:
+        return self._skill_manager.resolve_skills(allowed_capabilities, extra_providers)
 
     def use_skill(self, 
                   allowed_capabilities: list[CapabilityRule], 
@@ -218,36 +242,8 @@ class Session:
 
     def get_tools(self) -> Iterable[Tool]:
         return [
-            self.subagent_spawn, 
             self.skill_use,
         ]
-
-    @cached_property
-    def subagent_spawn(self) -> Tool:
-        @FunctionTool.wrapper(required_capabilities=Capability.SUBAGENT_SPAWN.value)
-        def spawn_subagent(prompt: str):
-            """Spawn a subagent to run task.
-            
-            Subagent will only return the final result instead of details 
-            which will can make the context of main agent clean.
-            If you need to run a task with many details, 
-            using this tool to delegate to a subagent is a better way.
-
-            Args:
-                prompt (int): tell subagent what to do including background and details necessary
-
-            Returns:
-                str: final result
-            """
-            console = ConsoleEventRenderer()
-            gen = self.spawn().stream(prompt)
-
-            while True:
-                try:
-                    console.print(next(gen))
-                except StopIteration as e:
-                    return e.value
-        return spawn_subagent
 
     @cached_property
     def skill_use(self) -> Tool:
@@ -331,3 +327,8 @@ class SessionMiddleware(Protocol):
 class SessionMiddlewareFactory(Protocol):
 
     def create(self, session: Session) -> SessionMiddleware:...
+
+
+class ContexManager:
+
+    pass

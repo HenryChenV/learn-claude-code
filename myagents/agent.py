@@ -143,7 +143,7 @@ class Agent:
     """
 
     _aid: AgentID
-    _agent_sys_prompt: Iterable[TextBlockParam]
+    _sys_prompt: Iterable[TextBlockParam]
     _model: ChatModel
     _allowed_capabilities: list[CapabilityRule]
     _max_tokens: int
@@ -157,7 +157,7 @@ class Agent:
             max_tokens: int = 8000) -> None:
         self._aid = AgentID.wrap(aid)
         self._model = model
-        self._agent_sys_prompt = [{"type": "text", "text": sys_prompt}] if sys_prompt else []
+        self._sys_prompt = [{"type": "text", "text": sys_prompt}] if sys_prompt else []
         self._allowed_capabilities = [CapabilityRule.wrap(c) for c in allowed_capabilities]
         self._max_tokens = max_tokens
 
@@ -176,6 +176,14 @@ class Agent:
     @property
     def name(self):
         return self._aid.name
+
+    @property
+    def allowed_capabilities(self):
+        return self._allowed_capabilities
+
+    @property
+    def sys_prompt(self):
+        return self._sys_prompt
 
     def run(self, ctx: AgentRunContext) -> Generator[Event, None, str]:
         tool_metas = self._resolve_tools(ctx)
@@ -318,8 +326,8 @@ class Agent:
         skill_prompt = self._resolve_skills_as_prompt(ctx)
 
         if skill_prompt:
-            return list(self._agent_sys_prompt) + [skill_prompt]
-        return self._agent_sys_prompt
+            return list(self._sys_prompt) + [skill_prompt]
+        return self._sys_prompt
 
     def _resolve_skills_as_prompt(self, ctx: AgentRunContext) -> Optional[TextBlockParam]:
         skills = ctx.resolve_skills(self._allowed_capabilities)
@@ -366,6 +374,10 @@ class Agent:
 
     def _build_event_extra(self, ctx: AgentRunContext):
         return ctx.get_evnet_extra()
+
+    @property
+    def event_extra(self) -> dict[str, Any]:
+        return {}
 
     def close(self):
         pass

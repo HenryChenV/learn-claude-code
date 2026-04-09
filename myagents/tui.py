@@ -4,10 +4,14 @@ from dotenv import load_dotenv
 from rich.console import Console
 from prompt_toolkit import prompt
 
-from myagents.capability import Capability
-from myagents.common import WORKDIR
-from myagents.skill import StaticSkillsLoader
-from myagents.tools import BuildinToolProvider
+from myagents.engine import ExecutionEngine
+from myagents.subagent import SubagentToolProvider
+
+from .capability import Capability
+from .common import WORKDIR
+from .runner import AgentRunner
+from .skill import StaticSkillsLoader
+from .tools import BuildinToolProvider
 
 from .chat_model import ChatModelManager
 
@@ -18,6 +22,8 @@ from .events import (
 from .task_tracker import TaskTrackerFactory
 from .agent import Agent
 from .session import Session
+from .events import Event
+from myagents import session
 
 
 # init env
@@ -35,36 +41,39 @@ Before creating task, you MUST ask the user for confirmation.
 """
 
 
-
-
 class TUI:
 
-    _console: Console
-    _renderer: EventRenderer
+    def __init__(self, mainsession: Session, mainagent: Agent, runner: AgentRunner):
+        self._console: Console = Console()
+        self._renderer: ConsoleEventRenderer = ConsoleEventRenderer(self._console)
+        self._mainsession: Session = mainsession
+        self._mainagent: Agent = mainagent
+        self._runner = runner
 
-    def __init__(self):
-        self._console = Console()
-        self._renderer = ConsoleEventRenderer(self._console)
+        # subscribe all events published
+        self._mainsession.subscribe(self)
 
-    def run(self, session: Session) -> None:
+    def run(self) -> None:
         while True:
 
             # Get user input
             try:
-                prompt = self.input(session)
+                prompt = self.input(self._mainsession)
             except (EOFError, KeyboardInterrupt):
-                return session.close()
+                return self._mainsession.close()
 
             prompt = prompt.strip()
             if prompt.strip().lower() in {"exit", "quit", "q"}:
-                return session.close()
+                return self._mainsession.close()
             if not prompt:
                 continue
 
-            # Handle the prompt and get the final content
-            for event in session.stream(prompt):
-                # Display the final output
-                self._renderer.print(event)
+            # Handle the prompt
+            self._runner.run(
+                session=self._mainsession, 
+                agent=self._mainagent, 
+                user_input=prompt
+            )
 
             print()
 
@@ -76,6 +85,12 @@ class TUI:
         self._console.print(header)
         self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
         return prompt()
+
+    def handle_event(self, event: Event) -> None:
+        self._renderer.print(event)
+
+    def get_interested_events(self) -> set[type[Event]]:
+        return set([Event])
 
 
 if __name__ == "__main__":
@@ -91,13 +106,16 @@ if __name__ == "__main__":
         ],
         sys_prompt=SYSTEM_PROMPT
     )
-    TUI().run(
-        Session(
-            sid="tui",
-            agent=mainagent,
-            tool_providers=[BuildinToolProvider.get_instance()],
-            skill_proviers=[StaticSkillsLoader(WORKDIR / "skills")], 
-            middleware_factories=[TaskTrackerFactory(3)],
-            theme_color="dodger_blue2"
-        ),
+
+    mainsession = Session(
+        sid="tui",
+        agent=mainagent,
+        tool_providers=[BuildinToolProvider.get_instance()],
+        skill_proviers=[StaticSkillsLoader(WORKDIR / "skills")], 
+        middleware_factories=[TaskTrackerFactory(3)],
+        theme_color="dodger_blue2"
     )
+    mainsession.add_tool_provider(SubagentToolProvider(mainsession, mainagent))
+
+    runner = AgentRunner(ExecutionEngine())
+    TUI(mainsession, mainagent, runner).run()
