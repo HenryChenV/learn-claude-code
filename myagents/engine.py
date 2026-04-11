@@ -210,7 +210,7 @@ class ExecutionEngine:
             "output": output_tokens,
             "cache_creation": resp.usage.cache_creation_input_tokens,
             "context": sum([input_tokens, output_tokens, cache_read_input_tokens or 0]),
-            "next_context_estimate": estimate_next_context(
+            "estimate": estimate_next_context(
                 model=resp.model,
                 prev_usage=resp.usage,
                 new_inputs=new_inputs
