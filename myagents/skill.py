@@ -301,7 +301,7 @@ class SkillManager:
         self._resolved_tools_cache = None
 
     def get_content(self, 
-                    allowed_capabilities: list[CapabilityRule], 
+                    allowed_capabilities: Iterable[CapabilityRule], 
                     skill_name: str, 
                     extra_providers: Iterable[SkillProvider] = []) -> str:
         """get content of the skill

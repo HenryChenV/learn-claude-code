@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 import json
+from re import sub
 from typing import Any, Callable, Iterable, Optional, Protocol, overload
 from anthropic.types import ContentBlock
 from rich.console import Console
@@ -216,6 +217,8 @@ class EventBus:
         event_types = subscriber.get_interested_events()
         if not event_types:
             return
+        
+        self._subcribers.add(subscriber)
         for et in event_types:
             self._subscriptions[et].add(subscriber)
 
@@ -229,182 +232,3 @@ class EventBus:
         
         for h in handlers:
             h.handle_event(event)
-
-
-class EventRenderer(Protocol):
-
-    def print(self, event: Event) -> None: 
-        """reader and print event
-        """
-        ...
-
-    @overload
-    def render_header(self, *, event: Optional[Event]) -> Text: ...
-
-    @overload
-    def render_header(self, *, paths: list[str] = [], color: str = "") -> Text: ...
-
-    def render_header(self, *, event: Optional[Event] = None, paths: list[str] = [], color: str = "") -> Text: ...
-
-    def render_title(self, 
-                     source_role: Role, source_name: str, 
-                     action: str = "",
-                     color: str = "", 
-                     signature="") -> Text: ...
-
-
-class ConsoleEventRenderer:
-
-    _console: Console
-
-    def __init__(self, console: Optional[Console] = None):
-        self._console = console or Console()
-
-    def print(self, event: Event) -> None:
-        match event:
-            case UserPromptEvent(prompt=prompt):
-                if event.source_name.lower() == "you":
-                    # The prompt is just typed by user and is diaplayed in tui.
-                    return None
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="UserPrompt", color="cyan"
-                    ),
-                    body=prompt,
-                )
-
-            case ThinkingEvent(thinking=thinking):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="Thinking", color="magenta"
-                    ),
-                    body=Markdown(thinking),
-                )
-
-            case AssitantOutputEvent(content=content):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="Output", color="green"
-                    ),
-                    body=Markdown(content)
-                )
-
-            case AssistantErrorEvent(error=error):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="Error", color="red"
-                    ),
-                    body=Markdown(str(error))
-                )
-
-            case ToolUseEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
-                              tool_input=tool_input):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="ToolUse", color="yellow",
-                        signature=f"{tool_name}/{tool_use_id}"
-                    ),
-                    body=f"{tool_name}({json.dumps(tool_input, indent=2, ensure_ascii=False)})"
-                )
-
-            case ToolResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
-                                 output=output):
-                if tool_name == "bash":
-                    body = Syntax(truncate(output, 150), "bash", theme="monokai", line_numbers=False)
-                else:
-                    body = f"{tool_name} -> {truncate(output, 150)}"
-
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="ToolResult", color="blue",
-                        signature=f"{tool_name}/{tool_use_id}"
-                    ),
-                    body=body
-                )
-
-            case SkillResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
-                                 output=output):
-                body = f"{tool_name} -> {truncate(output, 150)}"
-
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="ToolResult", color="blue",
-                        signature=f"{tool_name}/{tool_use_id}"
-                    ),
-                    body=body
-                )
-
-            case SystemWarnEvent(content=content):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="SystemWarn", color="orange3",
-                    ),
-                    body=str(content)
-                )
-
-            case UnknownEvent(data=data):
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name, 
-                        action="SystemWarn", color="red",
-                    ),
-                    body=str(data)
-                )
-
-            case _:
-                self._print(
-                    header=self.render_header(event=event),
-                    title=self.render_title(
-                        event.source_role, event.source_name,
-                        color="red",
-                    ),
-                    body=str(event)
-                )
-
-    @overload
-    def render_header(self, *, event: Optional[Event]) -> Text: ...
-
-    @overload
-    def render_header(self, *, paths: list[str] = [], color: str = "") -> Text: ...
-
-    def render_header(self, *, event: Optional[Event] = None, paths: list[str] = [], color: str = "") -> Text:
-        if event:
-            final_paths = event.paths
-            final_color = event.extra.get("theme_color", "")
-        else:
-            final_paths = paths
-            final_color = color
-        return Text(" > ".join([p.capitalize() for p in final_paths if p]), style=f"reverse {final_color}")
-
-    def render_title(self, 
-                     source_role: Role, source_name: str, 
-                     action: str = "",
-                     color: str = "", 
-                     signature="") -> Text:
-        return Text.assemble(
-            (f"{source_role.name}/{source_name}", f"bold {color}"), 
-            (f" {action}" if action else "", f"{color}"),
-            (f" ({signature})" if signature else "", f"italic {color}")
-        )
-
-    def _print(self, header: Any, title: Any, body: Any) -> None:
-        self._console.print(header)
-        self._console.print(title)
-        self._console.print(Padding(body, (0, 0, 0, 4)))

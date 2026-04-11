@@ -1,4 +1,7 @@
+from abc import ABC
 import os
+from re import sub
+from typing import Optional
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -13,17 +16,14 @@ from .runner import AgentRunner
 from .skill import StaticSkillsLoader
 from .tools import BuildinToolProvider
 
-from .chat_model import ChatModelManager
+from .chat_model import ChatModelManager, ModelSpec
 
-from .events import (
-    EventRenderer, 
-    ConsoleEventRenderer,
-)
+from .events import *
+
 from .task_tracker import TaskTrackerFactory
 from .agent import Agent
 from .session import Session
 from .events import Event
-from myagents import session
 
 
 # init env
@@ -39,6 +39,163 @@ You are a coding agent at {os.getcwd()}.
 Use bash to solve tasks. Act, don't explain.
 Before creating task, you MUST ask the user for confirmation.
 """
+
+
+class ConsoleEventRenderer:
+
+    _console: Console
+
+    def __init__(self, console: Optional[Console] = None):
+        self._console = console or Console()
+
+    def print(self, event: Event) -> None:
+        match event:
+            case UserPromptEvent(prompt=prompt):
+                if event.source_name.lower() == "you":
+                    # The prompt is just typed by user and is diaplayed in tui.
+                    return None
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="UserPrompt", color="cyan"
+                    ),
+                    body=prompt,
+                )
+
+            case ThinkingEvent(thinking=thinking):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="Thinking", color="magenta"
+                    ),
+                    body=Markdown(thinking),
+                )
+
+            case AssitantOutputEvent(content=content):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="Output", color="green"
+                    ),
+                    body=Markdown(content)
+                )
+
+            case AssistantErrorEvent(error=error):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="Error", color="red"
+                    ),
+                    body=Markdown(str(error))
+                )
+
+            case ToolUseEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
+                              tool_input=tool_input):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="ToolUse", color="yellow",
+                        signature=f"{tool_name}/{tool_use_id}"
+                    ),
+                    body=f"{tool_name}({json.dumps(tool_input, indent=2, ensure_ascii=False)})"
+                )
+
+            case ToolResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
+                                 output=output):
+                if tool_name == "bash":
+                    body = Syntax(truncate(output, 150), "bash", theme="monokai", line_numbers=False)
+                else:
+                    body = f"{tool_name} -> {truncate(output, 150)}"
+
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="ToolResult", color="blue",
+                        signature=f"{tool_name}/{tool_use_id}"
+                    ),
+                    body=body
+                )
+
+            case SkillResultEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
+                                 output=output):
+                body = f"{tool_name} -> {truncate(output, 150)}"
+
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="ToolResult", color="blue",
+                        signature=f"{tool_name}/{tool_use_id}"
+                    ),
+                    body=body
+                )
+
+            case SystemWarnEvent(content=content):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="SystemWarn", color="orange3",
+                    ),
+                    body=str(content)
+                )
+
+            case UnknownEvent(data=data):
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name, 
+                        action="SystemWarn", color="red",
+                    ),
+                    body=str(data)
+                )
+
+            case _:
+                self._print(
+                    header=self.render_header(event=event),
+                    title=self.render_title(
+                        event.source_role, event.source_name,
+                        color="red",
+                    ),
+                    body=str(event)
+                )
+
+    @overload
+    def render_header(self, *, event: Optional[Event]) -> Text: ...
+
+    @overload
+    def render_header(self, *, paths: list[str] = [], color: str = "") -> Text: ...
+
+    def render_header(self, *, event: Optional[Event] = None, paths: list[str] = [], color: str = "") -> Text:
+        if event:
+            final_paths = event.paths
+            final_color = event.extra.get("theme_color", "")
+        else:
+            final_paths = paths
+            final_color = color
+        return Text(" > ".join([p.capitalize() for p in final_paths if p]), style=f"reverse {final_color}")
+
+    def render_title(self, 
+                     source_role: Role, source_name: str, 
+                     action: str = "",
+                     color: str = "", 
+                     signature="") -> Text:
+        return Text.assemble(
+            (f"{source_role.name}/{source_name}", f"bold {color}"), 
+            (f" {action}" if action else "", f"{color}"),
+            (f" ({signature})" if signature else "", f"italic {color}")
+        )
+
+    def _print(self, header: Any, title: Any, body: Any) -> None:
+        self._console.print(header)
+        self._console.print(title)
+        self._console.print(Padding(body, (0, 0, 0, 4)))
 
 
 class TUI:
@@ -60,13 +217,14 @@ class TUI:
             try:
                 prompt = self.input(self._mainsession)
             except (EOFError, KeyboardInterrupt):
-                return self._mainsession.close()
+                return
+
+            if not prompt:
+                continue
 
             prompt = prompt.strip()
             if prompt.strip().lower() in {"exit", "quit", "q"}:
-                return self._mainsession.close()
-            if not prompt:
-                continue
+                return
 
             # Handle the prompt
             self._runner.run(
@@ -96,7 +254,7 @@ class TUI:
 if __name__ == "__main__":
     mainagent = Agent(
         aid="main", 
-        model=ChatModelManager.get_default().get_model("MiniMax", "MiniMax-M2.7"),
+        models=[ModelSpec("MiniMax", "MiniMax-M2.7")],
         allowed_capabilities=[
             Capability.BASH.value,
             Capability.FILE_READ.value,
@@ -110,12 +268,18 @@ if __name__ == "__main__":
     mainsession = Session(
         sid="tui",
         agent=mainagent,
+        model_manager=ChatModelManager.get_default(),
         tool_providers=[BuildinToolProvider.get_instance()],
-        skill_proviers=[StaticSkillsLoader(WORKDIR / "skills")], 
+        skill_providers=[StaticSkillsLoader(WORKDIR / "skills")], 
         middleware_factories=[TaskTrackerFactory(3)],
         theme_color="dodger_blue2"
     )
-    mainsession.add_tool_provider(SubagentToolProvider(mainsession, mainagent))
 
     runner = AgentRunner(ExecutionEngine())
-    TUI(mainsession, mainagent, runner).run()
+
+    tui = TUI(mainsession, mainagent, runner)
+
+    # support subagent which will also publish events to tui
+    mainsession.add_tool_provider(SubagentToolProvider(mainsession, mainagent, subs=[tui]))
+
+    tui.run()

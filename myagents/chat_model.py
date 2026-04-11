@@ -9,6 +9,16 @@ from anthropic import Anthropic, Omit, omit
 from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionParam
 from typing import Any, Iterable, Union
 
+from dataclasses import dataclass
+
+from myagents.tools.core.tool import ToolMeta
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    provider: str
+    model: str
+
 
 class ChatModel:
 
@@ -19,19 +29,29 @@ class ChatModel:
         self._model_id = model_id
         self._client = client
 
-    @abstractmethod
+    @property
+    def model_id(self):
+        return self._model_id
+
     def chat(self, 
              max_tokens: int,
              messages: Iterable[MessageParam], 
              system_prompt:Union[str, Iterable[TextBlockParam]] | Omit = omit,
-             tools: Iterable[ToolUnionParam] | Omit = omit) -> Message:
+             tools: Iterable[ToolMeta] = []) -> Message:
         return self._client.messages.create(
             max_tokens=max_tokens,
             model=self._model_id, 
             system=system_prompt,
             messages=messages, 
-            tools=tools, 
+            tools=[self._build_tool_desc(t) for t in tools], 
         )
+
+    def _build_tool_desc(self, meta: ToolMeta) -> ToolUnionParam:
+        return {
+            "name": meta.name,
+            "description": meta.description,
+            "input_schema": meta.input_schema,
+        }
 
 
 class ChatModelProvider(ABC):
@@ -75,7 +95,10 @@ class ChatModelManager:
         self._model_list = copy.deepcopy(model_list)
         self._provider_cache = {}
 
-    def get_model(self, provider: str, model: str) -> ChatModel:
+    def get_model(self, spec: ModelSpec) -> ChatModel:
+        provider = spec.provider
+        model = spec.model
+
         if provider not in self._model_list:
             raise ValueError(
                 f"Provider {provider} is not supported." 

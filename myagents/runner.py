@@ -20,8 +20,8 @@ class AgentRunner:
                  observers: list[EventSubscriber] = []):
         self._engine: ExecutionEngine = engine
 
-    def run(self, session: Session, agent: Agent, user_input: str) -> str:
+    def run(self, session: Session, agent: Agent, user_input: str) -> None:
         # append user input to session
         session.append_user_input(user_input)
         # run loop
-        return self._engine.run(session, agent)
+        self._engine.run(session, agent)

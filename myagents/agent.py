@@ -3,23 +3,16 @@ Agent class for the myagents package.
 """
 
 
-import traceback
 from typing import Generator, Iterable, Literal, Optional, Self, Union
+from anthropic.types import Message, MessageParam, TextBlockParam
 
-from anthropic import Omit, omit
-from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionParam
-
-from myagents.tools.core.provider import ToolProvider
-
+from .tools.core.provider import ToolProvider
 from .skill import SkillMeta, SkillProvider
-
 from .ids import HierarchicalID
-
 from .capability import CapabilityRule
-
 from .tools.core import ToolMeta
 from .events import *
-from .chat_model import ChatModel
+from .chat_model import ModelSpec
 
 
 class AgentRunHooks:
@@ -142,24 +135,19 @@ class Agent:
         _allowed_capabilities (list[str]): capabilities
     """
 
-    _aid: AgentID
-    _sys_prompt: Iterable[TextBlockParam]
-    _model: ChatModel
-    _allowed_capabilities: list[CapabilityRule]
-    _max_tokens: int
-
     def __init__(
             self, 
             aid: Union[str, AgentID], 
-            model: ChatModel,
+            models: Iterable[ModelSpec],
             allowed_capabilities: list[str] = [],
             sys_prompt: Optional[str] = None,
             max_tokens: int = 8000) -> None:
-        self._aid = AgentID.wrap(aid)
-        self._model = model
-        self._sys_prompt = [{"type": "text", "text": sys_prompt}] if sys_prompt else []
-        self._allowed_capabilities = [CapabilityRule.wrap(c) for c in allowed_capabilities]
-        self._max_tokens = max_tokens
+        self._aid: AgentID = AgentID.wrap(aid)
+        self._models: Iterable[ModelSpec] = models
+        self._sys_prompt: Iterable[TextBlockParam] = \
+            [{"type": "text", "text": sys_prompt}] if sys_prompt else []
+        self._allowed_capabilities: Iterable[CapabilityRule] = [CapabilityRule.wrap(c) for c in allowed_capabilities]
+        self._max_tokens: int = max_tokens
 
     def spawn(self, allow_sub_spawn: bool = False) -> Self:
         if allow_sub_spawn:
@@ -168,7 +156,7 @@ class Agent:
             capabilities = [c.raw for c in self._allowed_capabilities] + ["!subagent.spawn"]
         return self.__class__(
             self._aid.spawn(),
-            model=self._model,
+            models=self._models,
             allowed_capabilities=capabilities,
             max_tokens=self._max_tokens
         )
@@ -185,199 +173,14 @@ class Agent:
     def sys_prompt(self):
         return self._sys_prompt
 
-    def run(self, ctx: AgentRunContext) -> Generator[Event, None, str]:
-        tool_metas = self._resolve_tools(ctx)
-        system_prompt = self._build_system_prompt(ctx)
-        try:
-            return (yield from self._loop(ctx, tool_metas, system_prompt))
+    @property
+    def models(self):
+        return self._models
 
-        except Exception as e:
-            error=f"Error during agent loop: {e}"
-            yield AssistantErrorEvent(
-                paths=self._build_paths(ctx, "loop", "error"),
-                source_name=self.name, 
-                error=f"{error}:\n{traceback.format_exc()}",
-                extra=self._build_event_extra(ctx),
-            )
-            return error
-
-    def _loop(self, 
-              ctx: AgentRunContext, 
-              tool_metas: list[ToolUnionParam],
-              system_prompt: Iterable[TextBlockParam],
-        ) -> Generator[Event, None, str]:
-        step_counter = 0
-        while True:
-            step_counter += 1
-
-            # Agent takes a step
-            try:
-                response = self._chat(
-                    messages=ctx.get_inputs(), 
-                    tools=tool_metas,
-                    system_prompt=system_prompt,
-                )
-            except Exception as e:
-                error=f"Error during agent step: {e}"
-                yield AssistantErrorEvent(
-                    paths=self._build_paths(ctx, f"step:{step_counter}"),
-                    source_name=self.name,
-                    error=f"{error}: \n{traceback.format_exc()}",
-                    extra=self._build_event_extra(ctx),
-                )
-                return error
-
-            # Append assistant turn
-            ctx.append_message("assistant", response.content)
-
-            loop_completed = None
-            if response.stop_reason == "tool_use":
-                # Tool Use
-                # Execute each tool call, collect results, 
-                # or call sub-agents as needed, 
-                # and append results to conversation for next step
-
-                loop_completed = False
-
-                results = []
-
-                for block in response.content:
-                    yield EventFactory.create(
-                        self._build_paths(ctx, f"step:{step_counter}"),
-                        self.name, 
-                        block,
-                        extra=self._build_event_extra(ctx),
-                    )
-
-                    # yield extra tool result for tool_use block
-                    if block.type == "tool_use":
-                        tool_name = block.name
-                        tool_kwargs = block.input
-
-                        # Tool call
-                        # skill use is a special tool use:
-                        # - For other tool uses, only the required capaibilites of tool should be evaluated,
-                        # - For skill use, not only the requried capabilities of the tool should be evaluated, 
-                        #   but also the required capabilities of skill to use should be evaluated. 
-                        #   The allowed capabilities should be given.
-                        if ctx.is_skill_use(tool_name):
-                            output = self._use_skill(ctx, tool_kwargs)
-                            yield SkillResultEvent(
-                                paths=self._build_paths(ctx, f"step:{step_counter}"),
-                                tool_name=tool_name, 
-                                tool_use_id=block.id, 
-                                output=output,
-                                extra=self._build_event_extra(ctx),
-                            )
-                        else:
-                            output = self._use_tool(ctx, tool_name, tool_kwargs) 
-                            # print(truncate(output))
-                            yield ToolResultEvent(
-                                paths=self._build_paths(ctx, f"step:{step_counter}"),
-                                tool_name=tool_name, 
-                                tool_use_id=block.id, 
-                                output=output,
-                                extra=self._build_event_extra(ctx),
-                            )
-
-                        results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
-
-                ctx.append_message("user", results)
-
-            else:
-                # Final Message
-                # If the model didn't call a tool, we're done
-                loop_completed = True
-                yield from EventFactory.generate(
-                    self._build_paths(ctx, f"step:{step_counter}"),
-                    self.name, 
-                    response.content,
-                    extra=self._build_event_extra(ctx),
-                )
-
-            # If the completed is None, it will be ignored.
-            # If anyone need the loop to continue, it must respoend an explicit False.
-            completed = yield from ctx.post_step(response)
-            if completed is False:
-                loop_completed = False
-            
-            if loop_completed:
-                return ctx.get_final_message()
-
-    def _chat(self, 
-              messages: Iterable[MessageParam], 
-              tools: Iterable[ToolUnionParam],
-              system_prompt: Iterable[TextBlockParam] = []) -> Message:
-        return self._model.chat(
-            max_tokens=self._max_tokens,
-            messages=messages,
-            system_prompt=system_prompt,
-            tools=tools,
-        )
-
-    def _resolve_tools(self, ctx: AgentRunContext) -> list[ToolUnionParam]:
-        tools = ctx.resolve_tools(
-            allowed_capabilities=self._allowed_capabilities,
-            extra_providers=[]
-        )
-        return [self._build_tool_desc(t) for t in tools]
-
-    def _build_system_prompt(self, ctx: AgentRunContext) -> Iterable[TextBlockParam]:
-        skill_prompt = self._resolve_skills_as_prompt(ctx)
-
-        if skill_prompt:
-            return list(self._sys_prompt) + [skill_prompt]
-        return self._sys_prompt
-
-    def _resolve_skills_as_prompt(self, ctx: AgentRunContext) -> Optional[TextBlockParam]:
-        skills = ctx.resolve_skills(self._allowed_capabilities)
-
-        if not skills:
-            return None
-        else:
-            skill_prompt = (
-                "If you plan to use the skill, please use use_skill tool to get more details. "
-                "The names and brief descriptions of available skill are below: "
-                "\n".join(f"  - {str(s)}" for s in skills)
-            )
-        return {"type": "text", "text": skill_prompt}
-
-    def _build_tool_desc(self, meta: ToolMeta) -> ToolUnionParam:
-        return {
-            "name": meta.name,
-            "description": meta.description,
-            "input_schema": meta.input_schema,
-        }
-
-    def _use_skill(self,
-                   ctx: AgentRunContext,
-                   tool_kwargs: dict) -> str:
-        return ctx.use_skill(
-            allowed_capabilities=self._allowed_capabilities,
-            skill_kwargs=tool_kwargs,
-            extra_providers=[]
-        )
-
-    def _use_tool(self, 
-                  ctx: AgentRunContext, 
-                  tool_name: str, 
-                  tool_kwargs: dict) -> str:
-        return ctx.use_tool(
-            allowed_capabilities=self._allowed_capabilities, 
-            tool_name=tool_name, 
-            tool_kwargs=tool_kwargs,
-            extra_providers=[]
-        )
-
-    def _build_paths(self, ctx: AgentRunContext, *parts):
-        return ctx.extend_paths(f"agent:{self.name}", "loop", *parts)
-
-    def _build_event_extra(self, ctx: AgentRunContext):
-        return ctx.get_evnet_extra()
+    @property
+    def max_tokens(self):
+        return self._max_tokens
 
     @property
     def event_extra(self) -> dict[str, Any]:
         return {}
-
-    def close(self):
-        pass

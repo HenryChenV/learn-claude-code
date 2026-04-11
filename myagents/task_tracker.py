@@ -240,11 +240,10 @@ class TaskTracker(SessionMiddleware):
         session.add_tool_provider(self._task_manager)
 
     @override
-    def post_agent_step(self, session: Session, resp: Message) -> Generator[Event, None, Optional[bool]]:
+    def post_agent_step(self, session: Session, resp: Message) -> bool:
         if not self._task_manager.has_uncompleted_task() or not self._task_manager.tool_names:
             # no uncompleted task, nothing to trace
-            yield from []
-            return None
+            return False
 
         idle = True
         if resp.stop_reason == "tool_use":
@@ -259,13 +258,11 @@ class TaskTracker(SessionMiddleware):
 
         if not idle:
             self._reset_idle_steps()
-            yield from []
-            return None
+            return False
 
         self._idle_steps += 1
         if self._idle_steps < self._max_idle_steps:
-            yield from []
-            return None
+            return False
 
         content = (f"TaskTracker(I'm not user, just a task tracker): "
                    f"You have uncompleted task "
@@ -273,17 +270,17 @@ class TaskTracker(SessionMiddleware):
                    f"The progress is {self._task_manager.current_task_progress}. " 
                    f"Please update the task status or explain why you cannot.")
 
-        yield SystemWarnEvent(
+        session.publish(SystemWarnEvent(
             paths=session.extend_paths(f"{self.__class__.__name__}", "idle_warn"), 
             source_name="TaskTracker", 
             content=content,
             extra=session.event_extra
-        )
+        ))
         session.append_message(role="user", content=content)
 
         self._reset_idle_steps()
 
-        return False
+        return True
 
     def _reset_idle_steps(self):
         self._idle_steps = 0
