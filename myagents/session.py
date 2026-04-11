@@ -10,7 +10,6 @@ from typing import Iterable, Literal, Optional, Protocol, Self, Any
 from anthropic.types import Message, MessageParam
 
 from .chat_model import ChatModel, ChatModelManager, ModelSpec
-from .events import Iterable
 from .skill import SkillManager, SkillMeta, SkillProvider
 
 from .ids import HierarchicalID
