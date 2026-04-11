@@ -5,11 +5,12 @@
 import traceback
 from typing import Any, Iterable, Optional
 
-from anthropic.types import Message, MessageParam, TextBlockParam, ToolUnionParam
+from anthropic.types import Message, TextBlockParam
 
-from myagents.chat_model import ChatModel
+from .chat_model import ChatModel
+from .utils import estimate_next_context
 
-from .events import AssistantErrorEvent, EventFactory, Role, SkillResultEvent, ToolResultEvent
+from .events import *
 
 from .tools.core.tool import ToolMeta
 
@@ -52,107 +53,169 @@ class ExecutionEngine:
         while True:
             step_counter += 1
 
-            # Agent takes a step
-            try:
-                response: Message = model.chat(
-                    max_tokens=agent.max_tokens,
-                    messages=session.messages, 
-                    tools=tools,
-                    system_prompt=system_prompt,
-                )
-            except Exception as e:
-                error=f"Error during agent step: {e}"
-                session.publish(AssistantErrorEvent(
-                    paths=self._build_paths_for_loop(session, agent, f"step:{step_counter}"),
-                    source_name=agent.name,
-                    error=f"{error}: \n{traceback.format_exc()}",
-                    extra=self._merge_event_extra(session, agent),
-                ))
-                return
-
-            # Append assistant turn
-            session.append_message("assistant", response.content)
-
-            loop_completed = None
-            continue_loop = False
-            if response.stop_reason == "tool_use":
-                # Tool Use
-                # Execute each tool call, collect results, 
-                # or call sub-agents as needed, 
-                # and append results to conversation for next step
-
-                continue_loop = True
-
-                results = []
-
-                for block in response.content:
-                    session.publish(EventFactory.create(
-                        self._build_paths_for_loop(session, agent, f"step:{step_counter}"),
-                        agent.name, 
-                        block,
-                        extra=self._merge_event_extra(session, agent),
-                    ))
-
-                    # yield extra tool result for tool_use block
-                    if block.type == "tool_use":
-                        tool_name = block.name
-                        tool_kwargs = block.input
-
-                        # Tool call
-                        # skill use is a special tool use:
-                        # - For other tool uses, only the required capaibilites of tool should be evaluated,
-                        # - For skill use, not only the requried capabilities of the tool should be evaluated, 
-                        #   but also the required capabilities of skill to use should be evaluated. 
-                        #   The allowed capabilities should be given.
-                        if session.is_skill_use(tool_name):
-                            output = session.use_skill(
-                                allowed_capabilities=agent.allowed_capabilities,
-                                skill_kwargs=tool_kwargs
-                            )
-                            session.publish(SkillResultEvent(
-                                paths=self._build_paths_for_loop(session, agent, f"step:{step_counter}"),
-                                tool_name=tool_name, 
-                                tool_use_id=block.id, 
-                                output=output,
-                                extra=self._merge_event_extra(session, agent),
-                            ))
-                        else:
-                            output = session.use_tool(
-                                allowed_capabilities=agent.allowed_capabilities,
-                                tool_name=tool_name, 
-                                tool_kwargs=tool_kwargs
-                            ) 
-                            # print(truncate(output))
-                            session.publish(ToolResultEvent(
-                                paths=self._build_paths_for_loop(session, agent, f"step:{step_counter}"),
-                                tool_name=tool_name, 
-                                tool_use_id=block.id, 
-                                output=output,
-                                extra=self._merge_event_extra(session, agent),
-                            ))
-
-                        results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
-
-                session.append_message("user", results)
-
-            else:
-                # Final Message
-                # If the model didn't call a tool, we're done
-                continue_loop = False
-                session.publish(*EventFactory.generate(
-                    self._build_paths_for_loop(session, agent, f"step:{step_counter}"),
-                    agent.name, 
-                    response.content,
-                    extra=self._merge_event_extra(session, agent),
-                ))
-
-            # If the completed is None, it will be ignored.
-            # If anyone need the loop to continue, it must respoend an explicit False.
-            if session.post_step(response):
-                continue_loop = True
+            continue_loop = self._step(
+                session=session,
+                agent=agent,
+                model=model,
+                step_counter=step_counter,
+                tools=tools,
+                system_prompt=system_prompt
+            )
             
             if not continue_loop:
                 return
+
+    def _step(self, 
+              session: Session, 
+              agent: Agent,
+              model: ChatModel,
+              step_counter: int,
+              tools: Iterable[ToolMeta],
+              system_prompt: Iterable[TextBlockParam]) -> bool:
+        event_paths_of_step = self._build_paths_for_loop(session, agent, f"step:{step_counter}")
+        event_extra = self._merge_event_extra(session, agent)
+
+        session.publish(StepStartEvent(
+            paths=event_paths_of_step,
+            source_name=agent.name,
+            extra=event_extra
+        ))
+
+        # Agent takes a step
+        try:
+            response: Message = model.chat(
+                max_tokens=agent.max_tokens,
+                messages=session.messages, 
+                tools=tools,
+                system_prompt=system_prompt,
+            )
+        except Exception as e:
+            error=f"Error during agent step: {e}"
+            session.publish(AssistantErrorEvent(
+                paths=event_paths_of_step,
+                source_name=agent.name,
+                error=f"{error}: \n{traceback.format_exc()}",
+                extra=event_extra,
+            ))
+            return False
+
+        # Append assistant turn
+        session.append_message("assistant", response.content)
+
+        continue_loop = False
+        tool_use_results = []
+        if response.stop_reason == "tool_use":
+            # Tool Use
+            # Execute each tool call, collect results, 
+            # or call sub-agents as needed, 
+            # and append results to conversation for next step
+
+            continue_loop = True
+
+
+            for block in response.content:
+                session.publish(EventFactory.create(
+                    event_paths_of_step,
+                    agent.name, 
+                    block,
+                    extra=event_extra,
+                ))
+
+                # yield extra tool result for tool_use block
+                if block.type == "tool_use":
+                    tool_name = block.name
+                    tool_kwargs = block.input
+
+                    # Tool call
+                    # skill use is a special tool use:
+                    # - For other tool uses, only the required capaibilites of tool should be evaluated,
+                    # - For skill use, not only the requried capabilities of the tool should be evaluated, 
+                    #   but also the required capabilities of skill to use should be evaluated. 
+                    #   The allowed capabilities should be given.
+                    if session.is_skill_use(tool_name):
+                        output = session.use_skill(
+                            allowed_capabilities=agent.allowed_capabilities,
+                            skill_kwargs=tool_kwargs
+                        )
+                        session.publish(SkillResultEvent(
+                            paths=event_paths_of_step,
+                            tool_name=tool_name, 
+                            tool_use_id=block.id, 
+                            output=output,
+                            extra=event_extra,
+                        ))
+                    else:
+                        output = session.use_tool(
+                            allowed_capabilities=agent.allowed_capabilities,
+                            tool_name=tool_name, 
+                            tool_kwargs=tool_kwargs
+                        ) 
+                        # print(truncate(output))
+                        session.publish(ToolResultEvent(
+                            paths=event_paths_of_step,
+                            tool_name=tool_name, 
+                            tool_use_id=block.id, 
+                            output=output,
+                            extra=event_extra,
+                        ))
+
+                    tool_use_results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
+
+            session.append_message("user", tool_use_results)
+
+        else:
+            # Final Message
+            # If the model didn't call a tool, we're done
+            continue_loop = False
+            for event in EventFactory.generate(
+                event_paths_of_step,
+                agent.name, 
+                response.content,
+                extra=event_extra,
+            ):
+                session.publish(event)
+
+        # If the completed is None, it will be ignored.
+        # If anyone need the loop to continue, it must respoend an explicit False.
+        if session.post_step(response):
+            continue_loop = True
+
+        session.publish(StepEndEvent(
+            paths=event_paths_of_step,
+            source_name=agent.name,
+            extra=event_extra,
+            model=response.model,
+            usage=self._evaluate_usage(
+                response, 
+                agent.max_tokens,
+                [str(tool_use_results)]
+            )
+        ))
+
+        return continue_loop
+
+    def _evaluate_usage(self, 
+                        resp: Message, 
+                        max_output_tokens: int,
+                        new_inputs: list[str] = []):
+        if not resp or not resp.usage:
+            return {}
+
+        input_tokens = resp.usage.input_tokens
+        output_tokens = resp.usage.output_tokens
+        cache_read_input_tokens = resp.usage.cache_read_input_tokens
+        return {
+            "input": input_tokens,
+            "cache_read": cache_read_input_tokens,
+            "output": output_tokens,
+            "cache_creation": resp.usage.cache_creation_input_tokens,
+            "context": sum([input_tokens, output_tokens, cache_read_input_tokens or 0]),
+            "next_context_estimate": estimate_next_context(
+                model=resp.model,
+                prev_usage=resp.usage,
+                new_inputs=new_inputs
+            )
+        }
 
     def _build_system_prompt(self, session: Session, agent: Agent) -> Iterable[TextBlockParam]:
         skill_prompt = self._resolve_skills_as_prompt(session, agent)

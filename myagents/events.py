@@ -7,18 +7,11 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-import json
 from re import sub
-from typing import Any, Callable, Iterable, Optional, Protocol, overload
+from typing import Any, Generator, Protocol, overload
 from anthropic.types import ContentBlock
-from rich.console import Console
-from rich.markdown import Markdown
-from rich.padding import Padding
-from rich.syntax import Syntax
-from rich.text import Text
 from typing_extensions import override
 
-from myagents.utils import truncate
 
 
 class Role(Enum):
@@ -130,6 +123,17 @@ class SkillResultEvent(SystemEvent):
 
 
 @dataclass(frozen=True, kw_only=True)
+class StepStartEvent(SystemEvent):
+    pass
+
+
+@dataclass(frozen=True, kw_only=True)
+class StepEndEvent(SystemEvent):
+    model: str
+    usage: dict
+
+
+@dataclass(frozen=True, kw_only=True)
 class AssitantOutputEvent(AssistantEvent):
     content: str
 
@@ -142,12 +146,18 @@ class UserPromptEvent(UserEvent):
 class EventFactory:
 
     @classmethod
-    def generate(cls, paths:list[str], agent_name: str, blocks: list[ContentBlock], extra={}) -> Iterable[Event]:
+    def generate(cls, 
+                 paths:list[str], 
+                 agent_name: str, 
+                 blocks: list[ContentBlock], extra={}) -> Generator[Event, None, None]:
         for block in blocks:
             yield cls.create(paths, agent_name, block, extra=extra)
 
     @classmethod
-    def create(cls, paths:list[str], agent_name: str, block: ContentBlock, extra={}) -> Event:
+    def create(cls, 
+               paths:list[str], 
+               agent_name: str, 
+               block: ContentBlock, extra={}) -> Event:
         if block.type == "thinking":
             return ThinkingEvent(
                 paths=paths,

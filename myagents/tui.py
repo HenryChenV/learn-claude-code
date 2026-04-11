@@ -50,12 +50,16 @@ class ConsoleEventRenderer:
 
     def print(self, event: Event) -> None:
         match event:
+            case StepStartEvent():
+                self._print(
+                    header=self.render_header(event=event),
+                )
+
             case UserPromptEvent(prompt=prompt):
                 if event.source_name.lower() == "you":
                     # The prompt is just typed by user and is diaplayed in tui.
                     return None
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="UserPrompt", color="cyan"
@@ -65,7 +69,6 @@ class ConsoleEventRenderer:
 
             case ThinkingEvent(thinking=thinking):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="Thinking", color="magenta"
@@ -75,7 +78,6 @@ class ConsoleEventRenderer:
 
             case AssitantOutputEvent(content=content):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="Output", color="green"
@@ -85,7 +87,6 @@ class ConsoleEventRenderer:
 
             case AssistantErrorEvent(error=error):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="Error", color="red"
@@ -96,7 +97,6 @@ class ConsoleEventRenderer:
             case ToolUseEvent(tool_name=tool_name, tool_use_id=tool_use_id, 
                               tool_input=tool_input):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="ToolUse", color="yellow",
@@ -113,7 +113,6 @@ class ConsoleEventRenderer:
                     body = f"{tool_name} -> {truncate(output, 150)}"
 
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="ToolResult", color="blue",
@@ -127,7 +126,6 @@ class ConsoleEventRenderer:
                 body = f"{tool_name} -> {truncate(output, 150)}"
 
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="ToolResult", color="blue",
@@ -138,7 +136,6 @@ class ConsoleEventRenderer:
 
             case SystemWarnEvent(content=content):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="SystemWarn", color="orange3",
@@ -148,7 +145,6 @@ class ConsoleEventRenderer:
 
             case UnknownEvent(data=data):
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="SystemWarn", color="red",
@@ -156,9 +152,22 @@ class ConsoleEventRenderer:
                     body=str(data)
                 )
 
+            case StepEndEvent(model=model, usage=usage):
+                blocks = [f"{model}"]
+                if usage:
+                    blocks.append(
+                        "[Usage] " +
+                        " ".join([f"{k}={format(v, ',') if isinstance(v, int) else v}" for k, v in usage.items() if v])
+                    )
+                self._print(
+                    footer=self.render_footer(
+                        event=event,
+                        blocks=blocks
+                    )
+                )
+
             case _:
                 self._print(
-                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name,
                         color="red",
@@ -179,7 +188,7 @@ class ConsoleEventRenderer:
         else:
             final_paths = paths
             final_color = color
-        return Text(" > ".join([p.capitalize() for p in final_paths if p]), style=f"reverse {final_color}")
+        return Text(" > ".join([p.capitalize() for p in final_paths if p]), style=f"reverse bold {final_color}")
 
     def render_title(self, 
                      source_role: Role, source_name: str, 
@@ -192,10 +201,26 @@ class ConsoleEventRenderer:
             (f" ({signature})" if signature else "", f"italic {color}")
         )
 
-    def _print(self, header: Any, title: Any, body: Any) -> None:
-        self._console.print(header)
-        self._console.print(title)
-        self._console.print(Padding(body, (0, 0, 0, 4)))
+    def render_footer(self, *, event: Optional[Event] = None, blocks: list[str] = [], color: str = "") -> Text:
+        if event:
+            final_color = event.extra.get("theme_color", "")
+        else:
+            final_color = color
+        return Text("▸ " + " · ".join(blocks), style=f"reverse {final_color}")
+
+    def _print(self, *, 
+               header: Any = None, 
+               title: Any = None, 
+               body: Any = None,
+               footer: Any = None) -> None:
+        if header:
+            self._console.print(header)
+        if title:
+            self._console.print(title)
+        if body:
+            self._console.print(Padding(body, (0, 0, 0, 4)))
+        if footer:
+            self._console.print(Padding(footer, (0, 0, 1, 0)))
 
 
 class TUI:
