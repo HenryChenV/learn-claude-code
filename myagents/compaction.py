@@ -23,11 +23,10 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Protocol
+from typing import Optional
 
 from anthropic.types import MessageParam, Usage
 
-from myagents.chat_model import ChatModelManager
 from myagents.session import Session, SessionMiddleware, SessionMiddlewareFactory
 from myagents.tools.core import Tool, FunctionTool
 
@@ -70,13 +69,13 @@ class CompactStats:
     实时统计信息，用于压缩决策。
     
     Attributes:
-        uncaptured_tool_results: 累计未压缩的 tool_result 数量（每次 micro_compact 后重置）
+        uncaptured_tool_results: 达到 min_output_chars_for_compact 但未处理（被 micro_compact 保留）的 tool_result 数量
+        unhandled_tool_results: 未判断过是否要压缩的 tool_result 数量（每次 post_tool_result 后增加）
         context_percentage: 当前 context 占 context_window 的百分比
-        recent_tool_names: 最近使用的工具名称列表（用于调试和决策）
     """
     uncaptured_tool_results: int = 0
+    unhandled_tool_results: int = 0
     context_percentage: float = 0.0
-    recent_tool_names: list[str] = field(default_factory=list)
 
 
 # =============================================================================
@@ -92,7 +91,7 @@ class ContextManager:
     2. 实时统计（CompactStats）：通过 track_tool_result 和 refresh_stats 更新
     3. 压缩决策：should_full_compact 用于外部判断
     4. 执行压缩：
-       - micro_compact: 保留最近 N 个 tool_result，其余写入文件并替换为占位符
+       - micro_compact: 保留最近 N 个，达到阈值的其余写入文件并替换为占位符
        - full_compact: 生成对话摘要，保存 transcript，返回压缩后的 messages
     
     Attributes:
@@ -101,7 +100,7 @@ class ContextManager:
         large_output_threshold: 大输出阈值，超过此值才持久化
         preview_chars: 预览字符数（头尾各取 preview_chars）
         min_output_chars_for_compact: 只有超过此值的 output 才计入 uncaptured_tool_results
-        large_output_dir: 大输出文件存储目录
+        tool_result_dump_dir: tool_result 持久化文件存储目录（包含 large_output 和 micro_compact 的文件）
         transcript_dir: transcript 文件存储目录
         summary_model: 摘要生成使用的模型
         summary_max_tokens_ratio: summary_max_tokens = context_window * ratio
@@ -114,20 +113,20 @@ class ContextManager:
         large_output_threshold: int = DEFAULT_LARGE_OUTPUT_THRESHOLD,
         preview_chars: int = DEFAULT_PREVIEW_CHARS,
         min_output_chars_for_compact: int = DEFAULT_MIN_OUTPUT_CHARS_FOR_COMPACT,
-        large_output_dir: Path = None,
-        transcript_dir: Path = None,
+        tool_result_dump_dir: Optional[Path] = None,
+        transcript_dir: Optional[Path] = None,
         summary_model: str = DEFAULT_SUMMARY_MODEL,
         summary_max_tokens_ratio: float = DEFAULT_SUMMARY_MAX_TOKENS_RATIO,
     ):
-        self._context_percentage_threshold: float = context_percentage_threshold
-        self._keep_recent_tool_results: int = keep_recent_tool_results
-        self._large_output_threshold: int = large_output_threshold
-        self._preview_chars: int = preview_chars
-        self._min_output_chars_for_compact: int = min_output_chars_for_compact
-        self._large_output_dir: Path = large_output_dir
-        self._transcript_dir: Path = transcript_dir
-        self._summary_model: str = summary_model
-        self._summary_max_tokens_ratio: float = summary_max_tokens_ratio
+        self._context_percentage_threshold = context_percentage_threshold
+        self._keep_recent_tool_results = keep_recent_tool_results
+        self._large_output_threshold = large_output_threshold
+        self._preview_chars = preview_chars
+        self._min_output_chars_for_compact = min_output_chars_for_compact
+        self._tool_result_dump_dir = tool_result_dump_dir or Path(".tool_result_dump")
+        self._transcript_dir = transcript_dir or Path(".transcripts")
+        self._summary_model = summary_model
+        self._summary_max_tokens_ratio = summary_max_tokens_ratio
 
         self._state = CompactState()
         self._stats = CompactStats()
@@ -150,12 +149,12 @@ class ContextManager:
     # Persistence
     # =========================================================================
 
-    def may_persist_output(self, tool_use_id: str, output: str) -> tuple[str, bool]:
+    def may_persist_large_output(self, tool_use_id: str, output: str) -> tuple[str, bool]:
         """
         大输出持久化。
         
         如果 output 长度超过 large_output_threshold：
-          1. 将完整内容写入 large_output_dir/{tool_use_id}.txt
+          1. 将完整内容写入 tool_result_dump_dir/{tool_use_id}.txt
           2. 返回格式化的预览字符串（头 + 尾各 preview_chars 字符）
           3. 返回 (预览内容, True)
         
@@ -173,23 +172,19 @@ class ContextManager:
         """
         if len(output) <= self._large_output_threshold:
             return (output, False)
-        return (self._persist_output(tool_use_id, output), True)
 
-    def _persist_output(self, tool_use_id: str, output: str) -> str:
-        """持久化输出，返回预览
-        """
         # 确保目录存在
-        self._large_output_dir.mkdir(parents=True, exist_ok=True)
+        self._tool_result_dump_dir.mkdir(parents=True, exist_ok=True)
 
         # 写入完整内容到文件
-        file_path = self._large_output_dir / f"{tool_use_id}.txt"
+        file_path = self._tool_result_dump_dir / f"{tool_use_id}.txt"
         file_path.write_text(output)
 
         # 生成预览（头 + 尾）
         head = output[:self._preview_chars]
         tail = output[-self._preview_chars:] if len(output) > self._preview_chars else ""
         
-        return (
+        preview = (
             f"<output persisted to: {file_path.name}>\n"
             f"Head ({self._preview_chars} chars):\n"
             f"{head}\n"
@@ -197,6 +192,8 @@ class ContextManager:
             f"Tail ({self._preview_chars} chars):\n"
             f"{tail}"
         )
+
+        return (preview, True)
 
     # =========================================================================
     # Statistics
@@ -207,50 +204,40 @@ class ContextManager:
         追踪 tool_result，用于 micro_compact 决策。
         
         规则：
-        - 如果 output 长度超过 min_output_chars_for_compact，则计入 uncaptured_tool_results
-        - 始终将 tool_name 加入 recent_tool_names 列表（保持长度不超过 keep_recent_tool_results）
+        - 所有 tool_result 都计入 unhandled_tool_results（表示待处理）
+        - 如果 output 长度超过 min_output_chars_for_compact，则同时计入 uncaptured_tool_results
         
         Args:
             tool_name: 工具名称
             output: 工具输出内容
         """
-        # 只有超过阈值的 output 才计入统计
+        # 计入未处理计数
+        self._stats.unhandled_tool_results += 1
+
+        # 只有超过阈值的才计入待压缩计数
         if len(output) > self._min_output_chars_for_compact:
             self._stats.uncaptured_tool_results += 1
 
-        # 记录最近使用的工具名称
-        self._stats.recent_tool_names.append(tool_name)
-        if len(self._stats.recent_tool_names) > self._keep_recent_tool_results:
-            self._stats.recent_tool_names = self._stats.recent_tool_names[-self._keep_recent_tool_results:]
-
-    def refresh_stats(self, model: str, usage: Usage) -> None:
+    def refresh_stats(self, context_window: int, usage: Usage) -> None:
         """
         根据 LLM 响应刷新 context 统计。
         
-        使用 estimate_next_context 计算预期消耗，然后更新 context_percentage。
-        计算方式参考 engine.py 中的 ExecutionEngine._evaluate_usage。
+        计算方式参考 engine.py 中的 ExecutionEngine._evaluate_usage：
+        - total_tokens = input_tokens + output_tokens + cache_read_input_tokens
+        - context_percentage = total_tokens / context_window
         
         Args:
-            model: 模型 ID
-            usage: LLM 响应中的 usage 信息（包含 input_tokens, output_tokens 等）
+            context_window: 模型的 context window 大小
+            usage: LLM 响应中的 usage 信息
         """
         if not usage:
             return
 
-        # 获取 context_window
-        model_manager = ChatModelManager.get_default()
-        chat_model = model_manager.get_model(model)
-        context_window = chat_model.context_window if chat_model else 200000
-
-        # 计算当前 context tokens
         input_tokens = usage.input_tokens
         output_tokens = usage.output_tokens
         cache_read_input_tokens = usage.cache_read_input_tokens or 0
 
-        # 计算预估的下一个 context 大小（包含本次输出）
         total_tokens = input_tokens + output_tokens + cache_read_input_tokens
-
-        # 更新 context percentage
         self._stats.context_percentage = total_tokens / context_window
 
     # =========================================================================
@@ -261,18 +248,15 @@ class ContextManager:
         """
         判断是否需要执行 full_compact。
         
-        条件（同时满足）：
-        1. context_percentage >= context_percentage_threshold
-        2. uncaptured_tool_results > 0
+        条件：context_percentage >= context_percentage_threshold
+        
+        注意：micro_compact 由内部判断执行，不在此决策。
         
         Returns:
             True: 需要 full_compact
             False: 暂不需要
         """
-        return (
-            self._stats.context_percentage >= self._context_percentage_threshold
-            and self._stats.uncaptured_tool_results > 0
-        )
+        return self._stats.context_percentage >= self._context_percentage_threshold
 
     # =========================================================================
     # Compression
@@ -280,14 +264,12 @@ class ContextManager:
 
     def micro_compact(self, messages: list[MessageParam]) -> list[MessageParam]:
         """
-        微压缩：保留最近 N 个 tool_result，其余写入文件并替换为占位符。
+        微压缩：保留最近 N 个达到阈值的 tool_result，其余写入文件并替换为占位符。
         
-        内部判断：如果 uncaptured_tool_results <= keep_recent_tool_results，不执行压缩。
-        压缩完成后重置 uncaptured_tool_results 为 0。
-        
-        对于每个被压缩的 tool_result：
-        1. 将内容写入 large_output_dir/{tool_use_id}.txt
-        2. 替换原始内容为占位符文本，包含读取提示
+        内部判断：只有当 unhandled_tool_results > 0 时才执行扫描。
+        扫描最近 unhandled_tool_results 个 tool_result block：
+        - 对于达到 min_output_chars_for_compact 且不在保留范围内的，压缩
+        - 压缩后重置 unhandled_tool_results 为 0
         
         Args:
             messages: 原始消息列表
@@ -295,26 +277,47 @@ class ContextManager:
         Returns:
             压缩后的消息列表
         """
-        # 内部判断：只有当未压缩数量超过保留数量时才执行
-        if self._stats.uncaptured_tool_results <= self._keep_recent_tool_results:
+        if self._stats.unhandled_tool_results <= 0:
             return messages
 
-        # 收集所有 tool_result 块
+        # 收集所有 tool_result 块（按出现顺序）
         tool_result_blocks = self._collect_tool_result_blocks(messages)
-        if len(tool_result_blocks) <= self._keep_recent_tool_results:
+        
+        # 只扫描未处理的部分
+        # 计算需要处理的 block 范围：全部 block 中，最后 unhandled_tool_results 个
+        total_tr_count = len(tool_result_blocks)
+        if total_tr_count < self._stats.unhandled_tool_results:
+            # 理论上不应该发生，但如果发生了，以实际数量为准
+            self._stats.unhandled_tool_results = total_tr_count
+        
+        # 需要处理的起始索引
+        start_idx = total_tr_count - self._stats.unhandled_tool_results
+        
+        # 统计在需要处理的范围内，达到阈值的 block 数量
+        candidates_for_compact = []
+        for i in range(start_idx, total_tr_count):
+            msg_idx, block_idx, block = tool_result_blocks[i]
+            content = block.get("content", "")
+            if isinstance(content, str) and len(content) > self._min_output_chars_for_compact:
+                candidates_for_compact.append((msg_idx, block_idx, block, content))
+
+        # 如果需要压缩的多于保留数量，则压缩较早的
+        # 保留范围是最后 keep_recent_tool_results 个
+        compact_count = len(candidates_for_compact) - self._keep_recent_tool_results
+        
+        if compact_count <= 0:
+            # 不需要压缩，但标记为已处理
+            self._stats.unhandled_tool_results = 0
             return messages
 
-        # 压缩较早的 tool_result（保留最近的）
-        for msg_idx, block_idx, block in tool_result_blocks[:-self._keep_recent_tool_results]:
-            content = block.get("content", "")
-            if not isinstance(content, str) or len(content) <= self._min_output_chars_for_compact:
-                continue
-
-            tool_use_id = block.get("tool_use_id", "unknown")
+        # 压缩较早的（排在前面的）候选者
+        for i in range(compact_count):
+            msg_idx, block_idx, block, content = candidates_for_compact[i]
+            tool_use_id = block.get("tool_use_id", f"unknown_{msg_idx}_{block_idx}")
 
             # 写入文件
-            self._large_output_dir.mkdir(parents=True, exist_ok=True)
-            file_path = self._large_output_dir / f"{tool_use_id}.txt"
+            self._tool_result_dump_dir.mkdir(parents=True, exist_ok=True)
+            file_path = self._tool_result_dump_dir / f"{tool_use_id}.txt"
             file_path.write_text(content)
 
             # 替换为占位符
@@ -323,9 +326,12 @@ class ContextManager:
                 f"If needed, use read_file to read the full content. "
                 f"Size: {len(content)} chars]"
             )
+            
+            # 减少 uncaptured 计数
+            self._stats.uncaptured_tool_results -= 1
 
-        # 重置计数器
-        self._stats.uncaptured_tool_results = 0
+        # 重置未处理计数
+        self._stats.unhandled_tool_results = 0
 
         return messages
 
@@ -370,6 +376,7 @@ class ContextManager:
 
         # 5. 重置 stats
         self._stats.uncaptured_tool_results = 0
+        self._stats.unhandled_tool_results = 0
 
         return compact_message
 
@@ -385,7 +392,7 @@ class ContextManager:
         收集所有 tool_result 块。
         
         Returns:
-            list of (message_index, block_index, block)
+            list of (message_index, block_index, block)，按出现顺序排列
         """
         blocks = []
         for msg_idx, message in enumerate(messages):
@@ -405,11 +412,11 @@ class ContextManager:
             messages: 消息列表
         
         Returns:
-            保存的文件路径
+            保存的文件路径，格式为 {timestamp}.jsonl
         """
         self._transcript_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = int(time.time())
-        path = self._transcript_dir / f"transcript_{timestamp}.jsonl"
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H:%M:%S")
+        path = self._transcript_dir / f"{timestamp}.jsonl"
         
         with path.open("w") as handle:
             for message in messages:
@@ -417,7 +424,7 @@ class ContextManager:
         
         return path
 
-    def _summarize(self, messages: list[MessageParam]) -> str:
+    def _summarize(self, messages: list[MessageParam], summary_model_object) -> str:
         """
         调用 LLM 生成对话摘要。
         
@@ -430,6 +437,7 @@ class ContextManager:
         
         Args:
             messages: 原始消息列表
+            summary_model_object: 用于生成摘要的模型对象（需有 chat() 方法和 context_window 属性）
         
         Returns:
             生成的摘要文本
@@ -452,23 +460,29 @@ Be compact but concrete. Include specific file names and decisions.
 CONVERSATION:
 {conversation}"""
 
-        # 调用 LLM 生成摘要
-        client = ChatModelManager.get_default().get_model(self._summary_model)
-        if not client:
-            return "[Summary unavailable]"
+        if not summary_model_object:
+            return "[Summary unavailable: no model]"
 
-        # 获取 context_window 计算 max_tokens
-        context_window = getattr(client, 'context_window', 200000)
+        # 计算 max_tokens
+        context_window = getattr(summary_model_object, 'context_window', 200000)
         max_tokens = int(context_window * self._summary_max_tokens_ratio)
 
         try:
-            response = client.chat(
+            response = summary_model_object.chat(
                 max_tokens=max_tokens,
                 messages=[{"role": "user", "content": prompt}],
                 tools=[],
                 system_prompt=[],
             )
-            return response.content[0].text.strip() if response.content else "[No summary generated]"
+            
+            # 过滤出 text block
+            text_blocks = [
+                block for block in response.content 
+                if hasattr(block, 'type') and block.type == 'text'
+            ]
+            if text_blocks:
+                return text_blocks[0].text.strip()
+            return "[No summary generated]"
         except Exception as e:
             return f"[Summary error: {e}]"
 
@@ -494,8 +508,7 @@ CONVERSATION:
             "## Summary\n\n"
             f"{summary}\n\n"
             "---\n"
-            f"Full transcript: {transcript_path}\n"
-            f"Large outputs: {self._large_output_dir}/"
+            f"Full transcript: {transcript_path}"
         )
         return [{"role": "user", "content": content}]
 
@@ -514,23 +527,19 @@ class ContextCompactorMiddleware(SessionMiddleware):
     3. 提供 compact 工具供 Agent 主动调用
     
     流程：
-      Session.append_tool_use_result():
+      pre_tool_result(tool_name, kwargs):
             │
-            ├── pre_tool_result(kwargs)  → 持久化大输出
-            │
-            ├── 追加 tool_result 到 messages
-            │
-            └── post_tool_result(tool_use_id, output)  → track_tool_result
+            └── 执行 tool，获得 output
+            └── track_tool_result + may_persist_large_output
+            └── 如果 was_persisted，替换 output 为预览
     
-      Session.post_agent_step():
-            │
-            └── post_agent_step(resp)
-                    │
-                    ├── refresh_stats(model, usage)  → 更新 context_percentage
-                    │
-                    ├── micro_compact() if uncaptured > keep_recent
-                    │
-                    └── full_compact() if should_full_compact()
+      post_tool_result(tool_use_id, tool_name, output):
+            └── 仅用于扩展点（当前无额外操作）
+    
+      post_agent_step():
+            ├── refresh_stats(context_window, usage)
+            ├── micro_compact() if unhandled > 0  # 内部判断
+            └── full_compact() if should_full_compact()
     
     Attributes:
         context_manager: 上下文管理器实例
@@ -545,7 +554,8 @@ class ContextCompactorMiddleware(SessionMiddleware):
         self._context_manager = context_manager
         self._summary_focus_hint = summary_focus_hint
         self._session: Optional[Session] = None
-        self._pending_intercepted_output: Optional[str] = None  # pre_tool_result 拦截的输出
+        # 存储 pre_tool_result 中可能需要替换的 output
+        self._pending_tool_result_content: Optional[tuple[str, str]] = None
 
     # =========================================================================
     # SessionMiddleware Implementation
@@ -563,10 +573,9 @@ class ContextCompactorMiddleware(SessionMiddleware):
         """
         在每个 agent step 结束后执行压缩检查。
         
-        1. 从 resp 获取 usage，调用 refresh_stats
-        2. micro_compact() 内部判断并执行（如果 uncaptured > keep_recent）
+        1. 获取 model 的 context_window，调用 refresh_stats
+        2. micro_compact() 内部判断并执行（如果 unhandled > 0）
         3. 如果 should_full_compact()，执行 full_compact()
-        4. 如果执行了压缩，追加提示消息到 session
         
         Returns:
             True: 继续循环
@@ -574,28 +583,22 @@ class ContextCompactorMiddleware(SessionMiddleware):
         """
         # 1. 刷新统计
         if resp.usage:
-            model = resp.model
-            self._context_manager.refresh_stats(model, resp.usage)
+            model_object = session.resolve_model([resp.model])
+            if model_object:
+                context_window = getattr(model_object, 'context_window', 200000)
+                self._context_manager.refresh_stats(context_window, resp.usage)
 
         # 2. 微压缩（内部判断是否执行）
         current_messages = list(session.messages)
         compacted_messages = self._context_manager.micro_compact(current_messages)
         if compacted_messages != current_messages:
             session.overwrite_messages(compacted_messages)
-            session.append_user_prompt(
-                prompt="[System] Some earlier tool outputs were compacted to save context space.",
-                new_round=False
-            )
 
         # 3. 完整压缩（外部判断）
         if self._context_manager.should_full_compact():
             messages = list(session.messages)
             compacted = self._context_manager.full_compact(messages)
             session.overwrite_messages(compacted)
-            session.append_user_prompt(
-                prompt="[System] Context was fully compacted due to length limits. Full history saved.",
-                new_round=False
-            )
             return True
 
         return False
@@ -608,10 +611,14 @@ class ContextCompactorMiddleware(SessionMiddleware):
         """
         在工具执行前的 hook。
         
-        目前用于记录可能的 large output 信息。
-        实际持久化在 post_tool_result 中根据实际输出大小判断。
+        注意：这个 hook 在 tool 执行之前调用，用于预处理。
+        实际 tool 执行由 caller 完成，结果通过 post_tool_result 回调。
+        
+        Args:
+            tool_name: 工具名称
+            kwargs: 工具参数
         """
-        # 预留扩展点：可以在这里根据 tool_name 和 kwargs 做一些预处理
+        # 预留扩展点
         pass
 
     def post_tool_result(
@@ -623,48 +630,41 @@ class ContextCompactorMiddleware(SessionMiddleware):
         """
         在工具结果追加到 messages 后的 hook。
         
-        1. 调用 track_tool_result 统计
-        2. 如果输出超过阈值，持久化并替换
+        注意：由于 track_tool_result 需要在 tool_result append 到 messages 之前调用，
+        实际统计逻辑在 ToolProvider 层面处理，此处仅作扩展点。
+        
+        Args:
+            tool_use_id: 工具调用 ID
+            tool_name: 工具名称
+            output: 工具输出内容
         """
-        # 追踪 tool_result
-        self._context_manager.track_tool_result(tool_name, output)
-
-        # 检查是否需要持久化
-        persisted_output, was_persisted = self._context_manager.may_persist_output(
-            tool_use_id, output
-        )
-
-        # 如果持久化了，需要更新 messages 中的内容
-        if was_persisted and self._session:
-            self._update_tool_result_in_messages(tool_use_id, persisted_output)
+        # 扩展点，当前无额外操作
+        pass
 
     # =========================================================================
     # Tool
     # =========================================================================
 
-    def compact_tool(self, focus: Optional[str] = None) -> str:
+    def compact_tool(self, session: Session, focus: Optional[str] = None) -> str:
         """
         Agent 调用的 compact 工具。
         
         手动触发完整压缩，Agent 可以传入 focus 指定保留重点。
         
         Args:
+            session: Session 实例
             focus: Agent 希望保留的重点
         
         Returns:
             压缩执行结果描述
         """
-        if not self._session:
-            return "[Error] Session not initialized"
-
-        messages = list(self._session.messages)
+        messages = list(session.messages)
         compacted = self._context_manager.full_compact(messages)
-        self._session.overwrite_messages(compacted)
+        session.overwrite_messages(compacted)
 
         return (
             f"Context compacted. "
             f"History saved to {self._context_manager._transcript_dir}. "
-            f"Large outputs saved to {self._context_manager._large_output_dir}. "
             f"Compact count: {self._context_manager.state.compact_count}"
         )
 
@@ -672,36 +672,17 @@ class ContextCompactorMiddleware(SessionMiddleware):
     # Internal Methods
     # =========================================================================
 
-    def _update_tool_result_in_messages(
-        self, 
-        tool_use_id: str, 
-        new_content: str
-    ) -> None:
+    def _get_summary_model(self, session: Session):
         """
-        更新 messages 中指定 tool_result 的内容。
+        获取用于摘要的模型对象。
         
         Args:
-            tool_use_id: 工具调用 ID
-            new_content: 新的内容（通常是预览）
-        """
-        if not self._session:
-            return
-
-        messages = list(self._session.messages)
-        for message in messages:
-            content = message.get("content")
-            if not isinstance(content, list):
-                continue
-            for block in content:
-                if (
-                    isinstance(block, dict) 
-                    and block.get("type") == "tool_result"
-                    and block.get("tool_use_id") == tool_use_id
-                ):
-                    block["content"] = new_content
-                    break
+            session: Session 实例
         
-        self._session.overwrite_messages(messages)
+        Returns:
+            模型对象，如果不可用返回 None
+        """
+        return session.resolve_model([self._context_manager._summary_model])
 
 
 # =============================================================================
@@ -760,7 +741,7 @@ class ContextCompactorFactory(SessionMiddlewareFactory):
         """
         # 生成目录路径
         session_dir = self._base_config_dir / self._session_id
-        large_output_dir = session_dir / "large_outputs"
+        tool_result_dump_dir = session_dir / "tool_results"
         transcript_dir = session_dir / "transcripts"
 
         # 创建 ContextManager
@@ -770,7 +751,7 @@ class ContextCompactorFactory(SessionMiddlewareFactory):
             large_output_threshold=self._large_output_threshold,
             preview_chars=self._preview_chars,
             min_output_chars_for_compact=self._min_output_chars_for_compact,
-            large_output_dir=large_output_dir,
+            tool_result_dump_dir=tool_result_dump_dir,
             transcript_dir=transcript_dir,
             summary_model=self._summary_model,
             summary_max_tokens_ratio=self._summary_max_tokens_ratio,
