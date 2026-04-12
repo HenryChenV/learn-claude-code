@@ -248,9 +248,7 @@ class TUI:
     def __init__(self):
         self._console: Console = Console()
         self._renderer: ConsoleEventRenderer = ConsoleEventRenderer(self._console)
-
-    def _new_promptkit(self):
-        return PromptSession(multiline=True)
+        self._promptkit: PromptSession = PromptSession(multiline=True)
 
     def run(self) -> None:
         mainagent = Agent(
@@ -309,10 +307,10 @@ class TUI:
 
             print()
 
-    def input(self, prompt: Optional[str] = None) -> str:
+    def input(self, prompt: str = "") -> str:
         """Implementation of HumanInput
         """
-        return self._new_promptkit().prompt(prompt) 
+        return self._promptkit.prompt(prompt) 
 
     def handle_event(self, event: Event) -> None:
         self._renderer.print(event)
