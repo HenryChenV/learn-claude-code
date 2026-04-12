@@ -66,6 +66,7 @@ class ConsoleEventRenderer:
                     # The prompt is just typed by user and is diaplayed in tui.
                     return None
                 self._print(
+                    header=self.render_header(event=event),
                     title=self.render_title(
                         event.source_role, event.source_name, 
                         action="UserPrompt", color="cyan"
