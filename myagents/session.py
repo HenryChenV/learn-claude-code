@@ -96,9 +96,12 @@ class Session:
         for event in events:
             self._event_bus.publish(event)
 
-    def append_user_prompt(self, prompt: str) -> None:
-        self._round_counter += 1
+    def append_user_prompt(self, prompt: str, new_round=True) -> None:
+        if new_round:
+            self._round_counter += 1
+
         self._conversation.append_user_prompt(prompt=prompt)
+
         self.publish(UserPromptEvent(
             source_name=self._user,
             paths=self.extend_paths(), 
@@ -114,6 +117,7 @@ class Session:
                                  extra={},
                                  exlcluded_blocks: set[str] = set()) -> None:
         self._conversation.append_assistant_content(content=content)
+
         for event in EventFactory.generate(content=content, 
                                            paths=paths, 
                                            agent_name=agent_name, 
@@ -132,6 +136,7 @@ class Session:
             tool_use_id=tool_use_id,
             tool_output=tool_output
         )
+
         if self.is_skill_use(tool_name):
             self.publish(SkillResultEvent(
                 paths=paths,

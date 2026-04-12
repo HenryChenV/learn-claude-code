@@ -276,7 +276,7 @@ class TaskTracker(SessionMiddleware):
             content=alert,
             extra=session.event_extra
         ))
-        session.append_user_prompt(prompt=alert)
+        session.append_user_prompt(prompt=alert, new_round=False)
 
         self._reset_idle_steps()
 
