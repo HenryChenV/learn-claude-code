@@ -22,6 +22,6 @@ class AgentRunner:
 
     def run(self, session: Session, agent: Agent, user_input: str) -> None:
         # append user input to session
-        session.append_user_input(user_input)
+        session.append_user_prompt(user_input)
         # run loop
         self._engine.run(session, agent)

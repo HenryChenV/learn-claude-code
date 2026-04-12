@@ -264,19 +264,19 @@ class TaskTracker(SessionMiddleware):
         if self._idle_steps < self._max_idle_steps:
             return False
 
-        content = (f"TaskTracker(I'm not user, just a task tracker): "
-                   f"You have uncompleted task "
-                   f"and don't update the status for at least {self._max_idle_steps} rounds." 
-                   f"The progress is {self._task_manager.current_task_progress}. " 
-                   f"Please update the task status or explain why you cannot.")
+        alert = (f"TaskTracker(I'm not user, just a task tracker): "
+                 f"You have uncompleted task "
+                 f"and don't update the status for at least {self._max_idle_steps} rounds." 
+                 f"The progress is {self._task_manager.current_task_progress}. " 
+                 f"Please update the task status or explain why you cannot.")
 
         session.publish(SystemWarnEvent(
             paths=session.extend_paths(f"{self.__class__.__name__}", "idle_warn"), 
             source_name="TaskTracker", 
-            content=content,
+            content=alert,
             extra=session.event_extra
         ))
-        session.append_message(role="user", content=content)
+        session.append_user_prompt(prompt=alert)
 
         self._reset_idle_steps()
 

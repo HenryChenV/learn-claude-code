@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from re import sub
-from typing import Any, Generator, Protocol, overload
+from typing import Any, Generator, Iterable, Protocol, overload
 from anthropic.types import ContentBlock
 from typing_extensions import override
 
@@ -147,17 +147,22 @@ class EventFactory:
 
     @classmethod
     def generate(cls, 
+                 content: Iterable[ContentBlock], 
                  paths:list[str], 
                  agent_name: str, 
-                 blocks: list[ContentBlock], extra={}) -> Generator[Event, None, None]:
-        for block in blocks:
+                 extra={},
+                 exlcluded_blocks: set[str] = set()) -> Generator[Event, None, None]:
+        for block in content:
+            if block.type in exlcluded_blocks:
+                continue
             yield cls.create(paths, agent_name, block, extra=extra)
 
     @classmethod
     def create(cls, 
                paths:list[str], 
                agent_name: str, 
-               block: ContentBlock, extra={}) -> Event:
+               block: ContentBlock, 
+               extra={}) -> Event:
         if block.type == "thinking":
             return ThinkingEvent(
                 paths=paths,
@@ -173,15 +178,6 @@ class EventFactory:
                 tool_name=block.name, 
                 tool_use_id=block.id, 
                 tool_input=block.input,
-                extra=extra,
-            )
-
-        elif block.type == "tool_result":
-            return ToolResultEvent(
-                paths=paths,
-                tool_name=block.data["name"], 
-                tool_use_id=block.data["id"], 
-                tool_output=block.data["output"],
                 extra=extra,
             )
 

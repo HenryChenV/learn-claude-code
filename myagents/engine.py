@@ -100,7 +100,13 @@ class ExecutionEngine:
             return False
 
         # Append assistant turn
-        session.append_message("assistant", response.content)
+        session.append_assistant_content(
+            content=response.content,
+            paths=event_paths_of_step,
+            agent_name=agent.name, 
+            extra=event_extra,
+            exlcluded_blocks=set(["tool_use"])
+        )
 
         continue_loop = False
         tool_use_results = []
@@ -114,17 +120,19 @@ class ExecutionEngine:
 
 
             for block in response.content:
-                session.publish(EventFactory.create(
-                    event_paths_of_step,
-                    agent.name, 
-                    block,
-                    extra=event_extra,
-                ))
-
                 # yield extra tool result for tool_use block
                 if block.type == "tool_use":
                     tool_name = block.name
                     tool_kwargs = block.input
+
+                    session.publish(ToolUseEvent(
+                        paths=event_paths_of_step,
+                        source_name=agent.name,
+                        tool_name=block.name, 
+                        tool_use_id=block.id, 
+                        tool_input=block.input,
+                        extra=event_extra,
+                    ))
 
                     # Tool call
                     # skill use is a special tool use:
@@ -137,43 +145,24 @@ class ExecutionEngine:
                             allowed_capabilities=agent.allowed_capabilities,
                             skill_kwargs=tool_kwargs
                         )
-                        session.publish(SkillResultEvent(
-                            paths=event_paths_of_step,
-                            tool_name=tool_name, 
-                            tool_use_id=block.id, 
-                            output=output,
-                            extra=event_extra,
-                        ))
                     else:
                         output = session.use_tool(
                             allowed_capabilities=agent.allowed_capabilities,
                             tool_name=tool_name, 
                             tool_kwargs=tool_kwargs
                         ) 
-                        # print(truncate(output))
-                        session.publish(ToolResultEvent(
-                            paths=event_paths_of_step,
-                            tool_name=tool_name, 
-                            tool_use_id=block.id, 
-                            output=output,
-                            extra=event_extra,
-                        ))
 
-                    tool_use_results.append({"type": "tool_result", "tool_use_id": block.id, "content": output})
-
-            session.append_message("user", tool_use_results)
-
+                    session.append_tool_use_result(
+                        tool_use_id=block.id,
+                        tool_name=tool_name,
+                        tool_output=output,
+                        paths=event_paths_of_step,
+                        extra=event_extra
+                    )
         else:
             # Final Message
             # If the model didn't call a tool, we're done
             continue_loop = False
-            for event in EventFactory.generate(
-                event_paths_of_step,
-                agent.name, 
-                response.content,
-                extra=event_extra,
-            ):
-                session.publish(event)
 
         # If the completed is None, it will be ignored.
         # If anyone need the loop to continue, it must respoend an explicit False.
@@ -188,7 +177,6 @@ class ExecutionEngine:
             usage=self._evaluate_usage(
                 model,
                 response, 
-                agent.max_tokens,
                 [str(tool_use_results)]
             )
         ))
@@ -198,7 +186,6 @@ class ExecutionEngine:
     def _evaluate_usage(self, 
                         model: ChatModel,
                         resp: Message, 
-                        max_output_tokens: int,
                         new_inputs: list[str] = []):
         if not resp or not resp.usage:
             return {}
