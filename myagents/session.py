@@ -277,15 +277,16 @@ class Session:
         }
 
 
-class SessionMiddleware(Protocol):
+class SessionMiddleware(ABC):
 
-    def post_session_init(self, session: 'Session') -> None: ...
+    def post_session_init(self, session: 'Session') -> None:
+        return
 
     def post_agent_step(self, session: 'Session', resp: Message) -> bool:
         return False
 
 
-class SessionMiddlewareFactory(Protocol):
+class SessionMiddlewareFactory(ABC):
 
     def create(self, session: Session) -> SessionMiddleware:...
 

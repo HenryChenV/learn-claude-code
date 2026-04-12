@@ -14,7 +14,7 @@ from anthropic.types import Message
 from myagents.capability import Capability
 from myagents.common import HumanInput
 
-from .session import Session, SessionMiddleware
+from .session import Session, SessionMiddleware, SessionMiddlewareFactory
 from .tools.core import Tool, FunctionTool
 from .events import Event, SystemWarnEvent
 
@@ -286,12 +286,13 @@ class TaskTracker(SessionMiddleware):
         self._idle_steps = 0
 
 
-class TaskTrackerFactory:
+class TaskTrackerFactory(SessionMiddlewareFactory):
 
     def __init__(self, human_input:HumanInput, max_idle_steps: int = 3):
         self._human_input: HumanInput = human_input
         self._max_idle_steps: int = max_idle_steps
 
+    @override
     def create(self, session: Session) -> TaskTracker:
         return TaskTracker(
             self._human_input, 
