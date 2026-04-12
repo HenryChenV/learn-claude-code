@@ -118,18 +118,18 @@ class ContextManager:
         summary_model: str = DEFAULT_SUMMARY_MODEL,
         summary_max_tokens_ratio: float = DEFAULT_SUMMARY_MAX_TOKENS_RATIO,
     ):
-        self._context_percentage_threshold = context_percentage_threshold
-        self._keep_recent_tool_results = keep_recent_tool_results
-        self._large_output_threshold = large_output_threshold
-        self._preview_chars = preview_chars
-        self._min_output_chars_for_compact = min_output_chars_for_compact
-        self._tool_result_dump_dir = tool_result_dump_dir or Path(".tool_result_dump")
-        self._transcript_dir = transcript_dir or Path(".transcripts")
-        self._summary_model = summary_model
-        self._summary_max_tokens_ratio = summary_max_tokens_ratio
+        self._context_percentage_threshold: float = context_percentage_threshold
+        self._keep_recent_tool_results: int = keep_recent_tool_results
+        self._large_output_threshold: int = large_output_threshold
+        self._preview_chars: int = preview_chars
+        self._min_output_chars_for_compact: int = min_output_chars_for_compact
+        self._tool_result_dump_dir: Path = tool_result_dump_dir or Path(".tool_result_dump")
+        self._transcript_dir: Path = transcript_dir or Path(".transcripts")
+        self._summary_model: str = summary_model
+        self._summary_max_tokens_ratio: float = summary_max_tokens_ratio
 
-        self._state = CompactState()
-        self._stats = CompactStats()
+        self._state: CompactState = CompactState()
+        self._stats: CompactStats = CompactStats()
 
     # =========================================================================
     # Properties
