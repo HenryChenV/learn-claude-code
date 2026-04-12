@@ -3,12 +3,12 @@ import os
 from typing import Optional
 
 from dotenv import load_dotenv
+from prompt_toolkit import PromptSession
 from rich.markdown import Markdown
 from rich.padding import Padding
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.console import Console
-import prompt_toolkit
 
 from myagents.engine import ExecutionEngine
 from myagents.subagent import SubagentToolProvider
@@ -20,7 +20,7 @@ from .runner import AgentRunner
 from .skill import StaticSkillsLoader
 from .tools import BuildinToolProvider
 
-from .chat_model import ChatModelManager, ModelSpec
+from .chat_model import ChatModelManager
 
 from .events import *
 
@@ -32,10 +32,6 @@ from .events import Event
 
 # init env
 load_dotenv(override=True)
-BASE_URL = os.getenv("ANTHROPIC_BASE_URL")
-if BASE_URL:
-    os.environ.pop("ANTHROPIC_AUTH_TOKEN", None)
-MODEL = os.environ["MODEL_ID"]
 
 
 SYSTEM_PROMPT = f"""
@@ -252,6 +248,7 @@ class TUI:
     def __init__(self):
         self._console: Console = Console()
         self._renderer: ConsoleEventRenderer = ConsoleEventRenderer(self._console)
+        self._promptkit: PromptSession = PromptSession(multiline=True)
 
     def run(self) -> None:
         mainagent = Agent(
@@ -310,11 +307,10 @@ class TUI:
 
             print()
 
-    def input(self, prompt: str) -> str:
+    def input(self, prompt: Optional[str] = None) -> str:
         """Implementation of HumanInput
-
         """
-        return prompt_toolkit.prompt(prompt)
+        return self._promptkit.prompt(prompt) 
 
     def handle_event(self, event: Event) -> None:
         self._renderer.print(event)
@@ -332,7 +328,7 @@ class TUI:
         )
         self._console.print(header)
         self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
-        return prompt_toolkit.prompt()
+        return self.input()
 
 
 if __name__ == "__main__":
