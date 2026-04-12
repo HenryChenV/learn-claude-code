@@ -20,6 +20,10 @@ class ModelSpec:
     model: str
     context_window: int
 
+    @property
+    def full_id(self):
+        return f"{self.provider}/{self.model}"
+
 
 class ChatModel:
 
