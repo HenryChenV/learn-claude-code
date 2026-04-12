@@ -117,12 +117,12 @@ class Session:
         return self._skill_manager.resolve_skills(allowed_capabilities, extra_providers)
 
     def resolve_model(self, 
-                      specs: Iterable[ModelSpec], 
+                      model_full_ids: Iterable[str], 
                       excluded: set[ModelSpec]=set()) -> Optional[ChatModel]:
-        for spec in specs:
-            if spec in excluded:
+        for full_id in model_full_ids:
+            if full_id in excluded:
                 continue
-            model = self._model_manager.get_model(spec)
+            model = self._model_manager.get_model(full_id)
             if not model:
                 continue
             return model

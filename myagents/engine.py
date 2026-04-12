@@ -186,6 +186,7 @@ class ExecutionEngine:
             extra=event_extra,
             model=response.model,
             usage=self._evaluate_usage(
+                model,
                 response, 
                 agent.max_tokens,
                 [str(tool_use_results)]
@@ -195,6 +196,7 @@ class ExecutionEngine:
         return continue_loop
 
     def _evaluate_usage(self, 
+                        model: ChatModel,
                         resp: Message, 
                         max_output_tokens: int,
                         new_inputs: list[str] = []):
@@ -204,17 +206,21 @@ class ExecutionEngine:
         input_tokens = resp.usage.input_tokens
         output_tokens = resp.usage.output_tokens
         cache_read_input_tokens = resp.usage.cache_read_input_tokens
+        cur_context = sum([input_tokens, output_tokens, cache_read_input_tokens or 0])
+        next_context_estimate = estimate_next_context(
+            model=model.model,
+            prev_usage=resp.usage,
+            new_inputs=new_inputs
+        )
         return {
-            "input": input_tokens,
-            "cache_read": cache_read_input_tokens,
-            "output": output_tokens,
-            "cache_creation": resp.usage.cache_creation_input_tokens,
-            "context": sum([input_tokens, output_tokens, cache_read_input_tokens or 0]),
-            "estimate": estimate_next_context(
-                model=resp.model,
-                prev_usage=resp.usage,
-                new_inputs=new_inputs
-            )
+            "input_tokens": input_tokens,
+            "cache_read_input_tokens": cache_read_input_tokens,
+            "output_tokens": output_tokens,
+            "cache_creation_input_tokens": resp.usage.cache_creation_input_tokens,
+            "cur_context": cur_context,
+            "cur_context_percentage": cur_context/model.context_window,
+            "next_context_estimate": next_context_estimate,
+            "next_context_estimate_percentage": next_context_estimate/model.context_window,
         }
 
     def _build_system_prompt(self, session: Session, agent: Agent) -> Iterable[TextBlockParam]:

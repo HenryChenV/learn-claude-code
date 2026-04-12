@@ -162,10 +162,26 @@ class ConsoleEventRenderer:
             case StepEndEvent(model=model, usage=usage):
                 blocks = [f"{model}"]
                 if usage:
-                    blocks.append(
-                        "[Usage] " +
-                        " ".join([f"{k}={format(v, ',') if isinstance(v, int) else v}" for k, v in usage.items() if v])
-                    )
+                    items: list[str] = []
+                    if usage.get("input_tokens"):
+                        items.append(f"input={usage['input_tokens']:,}")
+                    if usage.get("cache_read_input_tokens"):
+                        items.append(f"cache_read={usage['cache_read_input_tokens']:,}")
+                    if usage.get("output_tokens"):
+                        items.append(f"output={usage['output_tokens']:,}")
+                    if usage.get("cache_creation_input_tokens"):
+                        items.append(f"cache_creation={usage['cache_creation_input_tokens']:,}")
+                    if usage.get("cur_context"):
+                        items.append(
+                            f"Context={usage['cur_context']:,}"
+                            f"/{usage['cur_context_percentage']:.2%}"
+                        )
+                    if usage.get("next_context_estimate"):
+                        items.append(
+                            f"Estimate={usage['next_context_estimate']:,}"
+                            f"/{usage['next_context_estimate_percentage']:.2%}"
+                        )
+                    blocks.append(f"[Usage] {'|'.join(items)}")
                 self._print(
                     footer=self.render_footer(
                         event=event,
@@ -286,7 +302,7 @@ class TUI:
 if __name__ == "__main__":
     mainagent = Agent(
         aid="main", 
-        models=[ModelSpec("MiniMax", "MiniMax-M2.7")],
+        models=["MiniMax/MiniMax-M2.7"],
         allowed_capabilities=[
             Capability.BASH.value,
             Capability.FILE_READ.value,

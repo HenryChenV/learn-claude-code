@@ -138,12 +138,12 @@ class Agent:
     def __init__(
             self, 
             aid: Union[str, AgentID], 
-            models: Iterable[ModelSpec],
+            models: Iterable[str],
             allowed_capabilities: list[str] = [],
             sys_prompt: Optional[str] = None,
             max_tokens: int = 8000) -> None:
         self._aid: AgentID = AgentID.wrap(aid)
-        self._models: Iterable[ModelSpec] = models
+        self._models: Iterable[str] = models
         self._sys_prompt: Iterable[TextBlockParam] = \
             [{"type": "text", "text": sys_prompt}] if sys_prompt else []
         self._allowed_capabilities: Iterable[CapabilityRule] = [CapabilityRule.wrap(c) for c in allowed_capabilities]
@@ -162,19 +162,19 @@ class Agent:
         )
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._aid.name
 
     @property
-    def allowed_capabilities(self):
+    def allowed_capabilities(self) -> Iterable[CapabilityRule]:
         return self._allowed_capabilities
 
     @property
-    def sys_prompt(self):
+    def sys_prompt(self) -> Iterable[TextBlockParam]:
         return self._sys_prompt
 
     @property
-    def models(self):
+    def models(self) -> Iterable[str]:
         return self._models
 
     @property

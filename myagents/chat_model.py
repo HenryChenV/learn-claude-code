@@ -18,20 +18,28 @@ from myagents.tools.core.tool import ToolMeta
 class ModelSpec:
     provider: str
     model: str
+    context_window: int
 
 
 class ChatModel:
 
-    _model_id: str
-    _client: Anthropic
-
-    def __init__(self, client: Anthropic, model_id):
-        self._model_id = model_id
+    def __init__(self, 
+                 spec: ModelSpec,
+                 client: Anthropic):
+        self._spec: ModelSpec = spec
         self._client = client
 
     @property
-    def model_id(self):
-        return self._model_id
+    def provider(self):
+        return self._spec.provider
+
+    @property
+    def model(self):
+        return self._spec.model
+
+    @property
+    def context_window(self) -> int:
+        return self._spec.context_window
 
     def chat(self, 
              max_tokens: int,
@@ -40,7 +48,7 @@ class ChatModel:
              tools: Iterable[ToolMeta] = []) -> Message:
         return self._client.messages.create(
             max_tokens=max_tokens,
-            model=self._model_id, 
+            model=self.model, 
             system=system_prompt,
             messages=messages, 
             tools=[self._build_tool_desc(t) for t in tools], 
@@ -56,16 +64,16 @@ class ChatModel:
 
 class ChatModelProvider(ABC):
 
-    _name: str
-    _client: Anthropic
-    _models: dict[str, ChatModel]
+    def __init__(self, 
+                 name, 
+                 model_specs: list[ModelSpec], 
+                 api_key, 
+                 base_url=None):
+        self._name: str = name
+        self._client: Anthropic = Anthropic(base_url=base_url, api_key=api_key)
+        self._models: dict[str, ChatModel] = {ms.model: ChatModel(ms, self._client) for ms in model_specs}
 
-    def __init__(self, name, model_ids: list[str], api_key, base_url=None):
-        self._name = name
-        self._client = Anthropic(base_url=base_url, api_key=api_key)
-        self._models = {m: ChatModel(self._client, m) for m in model_ids}
-
-    def get_model(self, model_id: str): 
+    def get_model(self, model_id: str) -> ChatModel: 
         """get mdoel by model_id
         """
         if model_id not in self._models:
@@ -77,10 +85,10 @@ MODEL_LIST = {
     "MiniMax": {
         "base_url": "https://api.minimaxi.com/anthropic",
         "api_key_env_var": "MINIMAX_API_KEY",
-        "models": [
-            "MiniMax-M2.7",
-            "MiniMax-M2.5",
-        ]
+        "models": {
+            "MiniMax-M2.7": {"context_window": 204800},
+            "MiniMax-M2.5": {"context_window": 204800},
+        }
     }
 }
 
@@ -95,9 +103,16 @@ class ChatModelManager:
         self._model_list = copy.deepcopy(model_list)
         self._provider_cache = {}
 
-    def get_model(self, spec: ModelSpec) -> ChatModel:
-        provider = spec.provider
-        model = spec.model
+    def get_model(self, model_full_id: str) -> ChatModel:
+        """get model by full id
+        Args:
+            model_full_id (str): in format "{provider}/{model_id}" 
+                                    e.g. MiniMax/MiniMax-M2.7
+        """
+        if not model_full_id:
+            raise ValueError("model_full_id is requried.")
+
+        provider, model_id = model_full_id.split("/", 2)
 
         if provider not in self._model_list:
             raise ValueError(
@@ -106,9 +121,9 @@ class ChatModelManager:
             )
 
         provider_conf = self._model_list[provider]
-        if model not in provider_conf["models"]:
+        if model_id not in provider_conf["models"]:
             raise ValueError(
-                f"Model {model} is not supported by Provider {provider}"
+                f"Model {model_id} is not supported by Provider {provider}"
                 f"Available models are {provider_conf['models']}"
             )
 
@@ -127,12 +142,13 @@ class ChatModelManager:
                 )
             self._provider_cache[provider] = ChatModelProvider(
                 name=provider,
-                model_ids=provider_conf["models"],
+                model_specs=[ModelSpec(provider, m, s["context_window"]) 
+                             for m, s in provider_conf["models"].items()],
                 api_key=api_key,
                 base_url=provider_conf.get("base_url"),
             )
         
-        return self._provider_cache[provider].get_model(model_id=model) 
+        return self._provider_cache[provider].get_model(model_id=model_id) 
 
     @classmethod
     def get_default(cls) -> 'ChatModelManager':
