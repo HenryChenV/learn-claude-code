@@ -53,18 +53,17 @@ class SubagentToolProvider:
 
         @FunctionTool.wrapper(required_capabilities=Capability.SUBAGENT_SPAWN.value)
         def spawn_subagent(prompt: str) -> str:
-            """Spawn a subagent to run task.
+            """创建一个subagent执行任务
             
-            Subagent will only return the final result instead of details 
-            which will can make the context of main agent clean.
-            If you need to run a task with many details, 
-            using this tool to delegate to a subagent is a better way.
+            如果任务比较复杂, 拆成了多个步骤, 可以将一个或者多个步骤交给subagent执行。
+            subagent将只返回最终结果, 隐藏中间细节。
+            这样你可以保持头脑清新，做任务结果汇总即可。
 
             Args:
-                prompt (int): tell subagent what to do including background and details necessary
+                prompt (str): 告诉subagent要做的任务, 以及必要的背景
 
             Returns:
-                str: final result
+                str: 最终结果
             """
             from .runner import AgentRunner
             from .engine import ExecutionEngine

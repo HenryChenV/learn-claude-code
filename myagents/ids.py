@@ -43,19 +43,19 @@ class HierarchicalID:
         return self.__class__(f"sub{self._sub_counter}", self)
 
     @property
-    def name(self):
+    def name(self) -> str:
         return self._name
 
     @property
-    def id(self):
+    def id(self) -> str:
         return self._id
 
     @property
-    def parent(self):
+    def parent(self) -> Optional[Self]:
         return self._parent
 
     @property
-    def created_at(self):
+    def created_at(self) -> datetime:
         return self._created_at
 
     @property

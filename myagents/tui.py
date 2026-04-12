@@ -1,7 +1,5 @@
-from abc import ABC
 import json
 import os
-from re import sub
 from typing import Optional
 
 from dotenv import load_dotenv
@@ -10,7 +8,7 @@ from rich.padding import Padding
 from rich.syntax import Syntax
 from rich.text import Text
 from rich.console import Console
-from prompt_toolkit import prompt
+import prompt_toolkit
 
 from myagents.engine import ExecutionEngine
 from myagents.subagent import SubagentToolProvider
@@ -28,7 +26,7 @@ from .events import *
 
 from .task_tracker import TaskTrackerFactory
 from .agent import Agent
-from .session import Session
+from .session import Session, SessionID
 from .events import Event
 
 
@@ -42,8 +40,11 @@ MODEL = os.environ["MODEL_ID"]
 
 SYSTEM_PROMPT = f"""
 You are a coding agent at {os.getcwd()}. 
-Use bash to solve tasks. Act, don't explain.
-Before creating task, you MUST ask the user for confirmation.
+尽量使用tools或skills完成任务。
+在执行任务前，如果你觉得任务不够清晰，可以和用户确认细节。
+得到不要的细节后，你先规划如何做，规划必须和用户确认, 得到用户允许后再执行。
+收到用户任务后, 如果任务较复杂或者执行时间较长, 使用工具跟踪进度, 使用subagent帮你做每个步骤, 你负责汇总.
+Act, don't explain.
 """
 
 
@@ -248,22 +249,48 @@ class ConsoleEventRenderer:
 
 class TUI:
 
-    def __init__(self, mainsession: Session, mainagent: Agent, runner: AgentRunner):
+    def __init__(self):
         self._console: Console = Console()
         self._renderer: ConsoleEventRenderer = ConsoleEventRenderer(self._console)
-        self._mainsession: Session = mainsession
-        self._mainagent: Agent = mainagent
-        self._runner = runner
-
-        # subscribe all events published
-        self._mainsession.subscribe(self)
 
     def run(self) -> None:
+        mainagent = Agent(
+            aid="main", 
+            models=["MiniMax/MiniMax-M2.7"],
+            allowed_capabilities=[
+                Capability.BASH.value,
+                Capability.FILE_READ.value,
+                "task.*", 
+                Capability.SUBAGENT_SPAWN.value,
+                Capability.SKILL_USE.value,
+            ],
+            sys_prompt=SYSTEM_PROMPT
+        )
+
+        mainsession = Session(
+            sid="tui",
+            agent=mainagent,
+            model_manager=ChatModelManager.get_default(),
+            tool_providers=[BuildinToolProvider.get_instance()],
+            skill_providers=[StaticSkillsLoader(WORKDIR / "skills")], 
+            middleware_factories=[TaskTrackerFactory(self, max_idle_steps=3)],
+            theme_color="dodger_blue2"
+        )
+        # subscribe all events published
+        mainsession.subscribe(self)
+
+        runner = AgentRunner(ExecutionEngine())
+
+        # support subagent which will also publish events to tui
+        mainsession.add_tool_provider(SubagentToolProvider(mainsession, mainagent, subs=[tui]))
+
         while True:
 
             # Get user input
             try:
-                prompt = self.input(self._mainsession)
+                prompt = self._input(mainsession.sid, 
+                                     mainsession.rounds, 
+                                     mainsession.theme_color)
             except (EOFError, KeyboardInterrupt):
                 return
 
@@ -275,22 +302,19 @@ class TUI:
                 return
 
             # Handle the prompt
-            self._runner.run(
-                session=self._mainsession, 
-                agent=self._mainagent, 
+            runner.run(
+                session=mainsession, 
+                agent=mainagent, 
                 user_input=prompt
             )
 
             print()
 
-    def input(self, session: Session) -> str:
-        header = self._renderer.render_header(
-            paths=[f"session:{session.sid.id}", f"round:{session.rounds + 1}"],
-            color=session.theme_color
-        )
-        self._console.print(header)
-        self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
-        return prompt()
+    def input(self, prompt: str) -> str:
+        """Implementation of HumanInput
+
+        """
+        return prompt_toolkit.prompt(prompt)
 
     def handle_event(self, event: Event) -> None:
         self._renderer.print(event)
@@ -298,36 +322,21 @@ class TUI:
     def get_interested_events(self) -> set[type[Event]]:
         return set([Event])
 
+    def _input(self, 
+              session_id: SessionID, 
+              session_rounds: int,
+              theme_color: str) -> str:
+        header = self._renderer.render_header(
+            paths=[f"session:{session_id.id}", f"round:{session_rounds + 1}"],
+            color=theme_color
+        )
+        self._console.print(header)
+        self._console.print(f"[bold cyan]Input:[/bold cyan] ", end="")
+        return prompt_toolkit.prompt()
+
 
 if __name__ == "__main__":
-    mainagent = Agent(
-        aid="main", 
-        models=["MiniMax/MiniMax-M2.7"],
-        allowed_capabilities=[
-            Capability.BASH.value,
-            Capability.FILE_READ.value,
-            "task.*", 
-            Capability.SUBAGENT_SPAWN.value,
-            Capability.SKILL_USE.value,
-        ],
-        sys_prompt=SYSTEM_PROMPT
-    )
 
-    mainsession = Session(
-        sid="tui",
-        agent=mainagent,
-        model_manager=ChatModelManager.get_default(),
-        tool_providers=[BuildinToolProvider.get_instance()],
-        skill_providers=[StaticSkillsLoader(WORKDIR / "skills")], 
-        middleware_factories=[TaskTrackerFactory(3)],
-        theme_color="dodger_blue2"
-    )
-
-    runner = AgentRunner(ExecutionEngine())
-
-    tui = TUI(mainsession, mainagent, runner)
-
-    # support subagent which will also publish events to tui
-    mainsession.add_tool_provider(SubagentToolProvider(mainsession, mainagent, subs=[tui]))
+    tui = TUI()
 
     tui.run()

@@ -12,6 +12,7 @@ from typing_extensions import override
 from anthropic.types import Message
 
 from myagents.capability import Capability
+from myagents.common import HumanInput
 
 from .session import Session, SessionMiddleware
 from .tools.core import Tool, FunctionTool
@@ -117,27 +118,26 @@ class TaskManager:
     """ trace the tasks
     """
 
-    # At most one task is allowed. Maybe support multi-task in the future
-    _current_task: Task | None
-    _task_tools: list[Tool] | None
-    _task_tool_names: list[str] | None
-
-    def __init__(self):
-        self._current_task = None
-        self._task_tools = None
-        self._task_tool_names = None
+    def __init__(self, human_input: HumanInput):
+        # At most one task is allowed. Maybe support multi-task in the future
+        self._current_task:Optional[Task] = None
+        self._task_tools: Optional[Iterable[Tool]] = None
+        self._task_tool_names: Optional[list[str]] = None
+        self._human_input: HumanInput = human_input
 
     def create_task(self, task_name: str, steps: list[str]):
         if self._current_task is not None and not self._current_task.is_done():
             raise RuntimeError(f"Current Task is not Done. Progress: {self._current_task.progress}")
         task = Task(task_name, steps)
-        print(f"Task: {task.detail}\n")
-        comment = input("type 'yes/y/ok/approved' to approve the task," 
-                        " or the operation will be interrupted with message you typed.\n "
-                        "Comment: ")
+        comment = self._human_input.input(
+            f"Task: {task.detail}\n\n"
+            "如果同意，请输入: 'yes/y/ok/approved' ,\n" 
+            "其他输入将拒绝任务创建，并将评论发送给Agent\n "
+            "Comment: "
+        )
 
         if comment not in ("yes", "y", "ok", "approved"):
-            raise CreateTaskFailure(f"User disapproved: {comment}")
+            raise CreateTaskFailure(f"用户拒绝创建. 理由: {comment}. 修复问题，然后重新创建任务.")
 
         self._current_task = task
         return self._current_task.detail
@@ -230,8 +230,8 @@ class TaskTracker(SessionMiddleware):
     _idle_steps: int
     _max_idle_steps: int
 
-    def __init__(self, max_idle_steps=3):
-        self._task_manager = TaskManager()
+    def __init__(self, human_input: HumanInput, max_idle_steps=3):
+        self._task_manager = TaskManager(human_input)
         self._idle_steps = 0
         self._max_idle_steps = max_idle_steps
 
@@ -288,8 +288,12 @@ class TaskTracker(SessionMiddleware):
 
 class TaskTrackerFactory:
 
-    def __init__(self, max_idle_steps: int = 3):
-        self._max_idle_steps = max_idle_steps
+    def __init__(self, human_input:HumanInput, max_idle_steps: int = 3):
+        self._human_input: HumanInput = human_input
+        self._max_idle_steps: int = max_idle_steps
 
     def create(self, session: Session) -> TaskTracker:
-        return TaskTracker(self._max_idle_steps)
+        return TaskTracker(
+            self._human_input, 
+            max_idle_steps=self._max_idle_steps
+        )

@@ -237,8 +237,8 @@ class ExecutionEngine:
             return None
         else:
             skill_prompt = (
-                "If you plan to use the skill, please use use_skill tool to get more details. "
-                "The names and brief descriptions of available skill are below: "
+                "在执行用户的任务前，先看下可用技能。"
+                "技能列表如下(仅包含name和简单描述, 更多细节使用工具use_skill获取):"
                 "\n".join(f"  - {str(s)}" for s in skills)
             )
         return {"type": "text", "text": skill_prompt}
